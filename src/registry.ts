@@ -4,6 +4,7 @@
 import type { AppConfig } from "./config.ts";
 import { AlpacaClient } from "./providers/alpaca.ts";
 import { YahooMarketDataClient } from "./providers/yahoo.ts";
+import { FallbackMarketDataClient } from "./providers/market-fallback.ts";
 import { SecFundamentalsProvider } from "./providers/sec.ts";
 import type { AlpacaMarketDataClient } from "./providers/interfaces.ts";
 import { OpenAIProvider } from "./providers/openai.ts";
@@ -18,16 +19,21 @@ export function buildRegistry(config: AppConfig) {
   ai.set("anthropic", new AnthropicProvider(config));
   ai.set("offline", new OfflineAnalysisProvider());
 
-  // Use Alpaca when credentials are present (real-time/IEX); otherwise fall back
-  // to the keyless Yahoo end-of-day source so pricing/technicals still work.
+  // Use Alpaca when credentials are present (real-time/IEX), but wrap it so any
+  // auth/error/empty result transparently falls back to the keyless Yahoo
+  // end-of-day source — pricing/technicals keep working even if the Alpaca keys
+  // are invalid, expired, or rate-limited.
+  const yahoo = new YahooMarketDataClient();
   const hasAlpaca = Boolean(config.secrets.alpacaKeyId && config.secrets.alpacaSecretKey);
   const market: AlpacaMarketDataClient = hasAlpaca
-    ? new AlpacaClient(config)
-    : new YahooMarketDataClient();
+    ? new FallbackMarketDataClient(new AlpacaClient(config), yahoo, (op, err) =>
+        console.error(`[market] Alpaca ${op} failed, using Yahoo fallback: ${String(err).slice(0, 120)}`),
+      )
+    : yahoo;
 
   return {
     alpaca: market,
-    marketSource: hasAlpaca ? "alpaca" : "yahoo",
+    marketSource: hasAlpaca ? "alpaca (yahoo fallback)" : "yahoo",
     fundamentals: new SecFundamentalsProvider(config),
     transcripts: buildTranscriptProviders(config),
     ai,

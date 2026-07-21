@@ -20,10 +20,14 @@ import type {
 } from "../types.ts";
 import type { AlpacaMarketDataClient } from "./interfaces.ts";
 
-const TRADING_BASE = "https://api.alpaca.markets";
+const LIVE_TRADING_BASE = "https://api.alpaca.markets";
+const PAPER_TRADING_BASE = "https://paper-api.alpaca.markets";
+
+class NonRetryableError extends Error {}
 
 export class AlpacaClient implements AlpacaMarketDataClient {
   private readonly dataUrl: string;
+  private readonly tradingBase: string;
   private readonly keyId: string;
   private readonly secret: string;
   private readonly feed: AlpacaFeed;
@@ -35,6 +39,9 @@ export class AlpacaClient implements AlpacaMarketDataClient {
     this.dataUrl = config.alpaca.dataUrl.replace(/\/$/, "");
     this.keyId = config.secrets.alpacaKeyId;
     this.secret = config.secrets.alpacaSecretKey;
+    // Paper keys (PK…) authenticate against the paper trading API; live keys
+    // against the live one. Market DATA always uses data.alpaca.markets.
+    this.tradingBase = this.keyId.startsWith("PK") ? PAPER_TRADING_BASE : LIVE_TRADING_BASE;
     this.feed = config.alpaca.feed;
     this.adjustment = config.alpaca.adjustment;
     this.timeoutMs = config.alpaca.requestTimeoutMs;
@@ -75,11 +82,14 @@ export class AlpacaClient implements AlpacaMarketDataClient {
           throw new Error(`Alpaca ${res.status} (retryable)`);
         }
         if (!res.ok) {
-          throw new Error(`Alpaca ${res.status}: ${await res.text()}`);
+          // Non-retryable (401/403/404/422): fail immediately so the caller can
+          // fall back without burning the retry budget.
+          throw new NonRetryableError(`Alpaca ${res.status}: ${(await res.text()).slice(0, 200)}`);
         }
         return { body: await res.json(), requestId };
       } catch (err) {
         lastErr = err;
+        if (err instanceof NonRetryableError) break;
         if (attempt < this.maxRetries) {
           await sleep(250 * 2 ** attempt);
         }
@@ -199,11 +209,7 @@ export class AlpacaClient implements AlpacaMarketDataClient {
 
   async getAssets(symbols?: string[]): Promise<AlpacaAsset[]> {
     // Asset metadata lives on the trading API, not the data API.
-    const { body } = await this.request(TRADING_BASE, "/v2/assets", {
-      status: "active",
-      asset_class: "us_equity",
-    });
-    const list: AlpacaAsset[] = (body as any[]).map((a) => ({
+    const map = (a: any): AlpacaAsset => ({
       symbol: a.symbol,
       name: a.name,
       exchange: a.exchange,
@@ -211,16 +217,29 @@ export class AlpacaClient implements AlpacaMarketDataClient {
       tradable: a.tradable,
       status: a.status,
       fractionable: a.fractionable,
-    }));
+    });
+    // Fetch per-symbol to avoid pulling the full ~10k asset list every call.
     if (symbols?.length) {
-      const set = new Set(symbols);
-      return list.filter((a) => set.has(a.symbol));
+      const out: AlpacaAsset[] = [];
+      for (const symbol of symbols) {
+        try {
+          const { body } = await this.request(this.tradingBase, `/v2/assets/${encodeURIComponent(symbol)}`);
+          out.push(map(body));
+        } catch {
+          /* unknown/untradable symbol — skip */
+        }
+      }
+      return out;
     }
-    return list;
+    const { body } = await this.request(this.tradingBase, "/v2/assets", {
+      status: "active",
+      asset_class: "us_equity",
+    });
+    return (body as any[]).map(map);
   }
 
   async getCalendar(request: CalendarRequest): Promise<MarketSession[]> {
-    const { body } = await this.request(TRADING_BASE, "/v2/calendar", {
+    const { body } = await this.request(this.tradingBase, "/v2/calendar", {
       start: request.start,
       end: request.end,
     });

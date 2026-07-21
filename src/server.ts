@@ -105,7 +105,8 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     lastPrice,
     priceTimestamp: snapshot?.latestTrade?.timestamp,
     delayed: snapshot?.delayed ?? true,
-    marketSource: registry.marketSource,
+    // True per-response provenance: the feed on the snapshot we actually used.
+    marketSource: snapshot?.feed ?? registry.marketSource,
     marketError,
     facts,
     technical,
