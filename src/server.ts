@@ -128,14 +128,16 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+const NO_STORE = { "cache-control": "no-store, no-cache, must-revalidate" };
+
 async function serveStatic(pathname: string): Promise<Response> {
   const rel = pathname === "/" ? "/index.html" : pathname;
   const safe = normalize(rel).replace(/^(\.\.(\/|\\|$))+/, "");
   const file = Bun.file(join(PUBLIC_DIR, safe));
-  if (await file.exists()) return new Response(file);
+  if (await file.exists()) return new Response(file, { headers: NO_STORE });
   // SPA fallback.
   const index = Bun.file(join(PUBLIC_DIR, "index.html"));
-  if (await index.exists()) return new Response(index);
+  if (await index.exists()) return new Response(index, { headers: NO_STORE });
   return json({ error: "not found" }, 404);
 }
 
