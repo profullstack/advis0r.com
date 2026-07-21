@@ -197,6 +197,36 @@ function rsiSeries(vals, period = 14) {
   }
   return out;
 }
+function emaSeries(vals, period) {
+  const out = new Array(vals.length).fill(null);
+  if (vals.length < period) return out;
+  const k = 2 / (period + 1);
+  let prev = vals.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  out[period - 1] = prev;
+  for (let i = period; i < vals.length; i++) { prev = vals[i] * k + prev * (1 - k); out[i] = prev; }
+  return out;
+}
+function bollinger(vals, period = 20, mult = 2) {
+  const upper = new Array(vals.length).fill(null), mid = new Array(vals.length).fill(null), lower = new Array(vals.length).fill(null);
+  for (let i = period - 1; i < vals.length; i++) {
+    const slice = vals.slice(i - period + 1, i + 1);
+    const m = slice.reduce((a, b) => a + b, 0) / period;
+    const sd = Math.sqrt(slice.reduce((a, b) => a + (b - m) ** 2, 0) / period);
+    mid[i] = m; upper[i] = m + mult * sd; lower[i] = m - mult * sd;
+  }
+  return { upper, mid, lower };
+}
+function macdSeries(vals, fast = 12, slow = 26, signal = 9) {
+  const ef = emaSeries(vals, fast), es = emaSeries(vals, slow);
+  const macd = vals.map((_, i) => (ef[i] == null || es[i] == null ? null : ef[i] - es[i]));
+  const idx = [], line = [];
+  macd.forEach((v, i) => { if (v != null) { idx.push(i); line.push(v); } });
+  const sigVals = emaSeries(line, signal);
+  const sig = new Array(vals.length).fill(null);
+  idx.forEach((origI, j) => { if (sigVals[j] != null) sig[origI] = sigVals[j]; });
+  const hist = vals.map((_, i) => (macd[i] == null || sig[i] == null ? null : macd[i] - sig[i]));
+  return { macd, signal: sig, hist };
+}
 /* Professional candlestick + volume + SMA charts via TradingView
    lightweight-charts (same library b1dz uses). */
 const LWC = window.LightweightCharts;
@@ -244,12 +274,38 @@ function mountPriceChart(bars) {
   volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   volSeries.setData(bars.map((b) => ({ time: b.t, value: b.v || 0, color: b.c >= b.o ? "rgba(34,197,94,0.45)" : "rgba(248,113,113,0.45)" })));
 
-  const smaLine = (arr, color) => {
-    const series = chart.addSeries(LWC.LineSeries, { color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  const overlay = (arr, opts) => {
+    const series = chart.addSeries(LWC.LineSeries, { lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...opts });
     series.setData(bars.map((b, i) => (arr[i] == null ? null : { time: b.t, value: arr[i] })).filter(Boolean));
   };
-  smaLine(s20, "#4c8dff");
-  smaLine(s50, "#ffb454");
+
+  // Bollinger Bands (20, 2): translucent upper/lower rails (middle = SMA20).
+  const bb = bollinger(closes, 20, 2);
+  overlay(bb.upper, { color: "rgba(150,160,190,0.85)", lineWidth: 1 });
+  overlay(bb.lower, { color: "rgba(150,160,190,0.85)", lineWidth: 1 });
+
+  overlay(s20, { color: "#4c8dff" });
+  overlay(s50, { color: "#ffb454" });
+
+  chart.timeScale().fitContent();
+}
+
+function mountMacdChart(bars) {
+  const el = document.getElementById("lwc-macd");
+  if (!el || !LWC || bars.length < 35) { if (el) el.outerHTML = ""; return; }
+  const closes = bars.map((b) => b.c);
+  const { macd, signal, hist } = macdSeries(closes, 12, 26, 9);
+  const chart = baseChart(el, 150);
+
+  // Histogram first (drawn under the lines), green/red by sign.
+  const histSeries = chart.addSeries(LWC.HistogramSeries, { priceLineVisible: false, lastValueVisible: false });
+  histSeries.setData(bars.map((b, i) => (hist[i] == null ? null : { time: b.t, value: hist[i], color: hist[i] >= 0 ? "rgba(34,197,94,0.55)" : "rgba(248,113,113,0.55)" })).filter(Boolean));
+
+  const macdLine = chart.addSeries(LWC.LineSeries, { color: "#4c8dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+  macdLine.setData(bars.map((b, i) => (macd[i] == null ? null : { time: b.t, value: macd[i] })).filter(Boolean));
+
+  const sigLine = chart.addSeries(LWC.LineSeries, { color: "#ffb454", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  sigLine.setData(bars.map((b, i) => (signal[i] == null ? null : { time: b.t, value: signal[i] })).filter(Boolean));
 
   chart.timeScale().fitContent();
 }
@@ -271,7 +327,7 @@ function mountRsiChart(bars) {
 function mountCharts(bars) {
   destroyCharts();
   // Defer to next frame so the modal has laid out and containers have width.
-  requestAnimationFrame(() => { mountPriceChart(bars); mountRsiChart(bars); });
+  requestAnimationFrame(() => { mountPriceChart(bars); mountRsiChart(bars); mountMacdChart(bars); });
 }
 
 const fmtNum = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d }));
@@ -304,11 +360,15 @@ function renderDetail(d) {
 
     <div class="chartbox">
       <div id="lwc-price" class="lwchart"></div>
-      <div class="legend"><span><i style="background:#22c55e"></i>Candles</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(120,120,140,.5)"></i>Volume</span></div>
+      <div class="legend"><span><i style="background:#22c55e"></i>Candles</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(150,160,190,.8)"></i>Bollinger 20/2</span><span><i style="background:rgba(120,120,140,.5)"></i>Volume</span></div>
     </div>
     <div class="chartbox">
       <div id="lwc-rsi" class="lwchart rsi"></div>
       <div class="legend"><span><i style="background:#c48dff"></i>RSI(14)</span><span>oversold 30 · overbought 70</span></div>
+    </div>
+    <div class="chartbox">
+      <div id="lwc-macd" class="lwchart macd"></div>
+      <div class="legend"><span><i style="background:#4c8dff"></i>MACD</span><span><i style="background:#ffb454"></i>Signal</span><span><i style="background:rgba(120,120,140,.6)"></i>Histogram</span><span>12 / 26 / 9</span></div>
     </div>
 
     <div class="dl-section"><h3>Technical</h3>

@@ -168,6 +168,7 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .chartbox svg { display: block; width: 100%; height: auto; }
 .lwchart { width: 100%; height: 320px; }
 .lwchart.rsi { height: 130px; }
+.lwchart.macd { height: 150px; }
 .chart-empty { color: var(--dim); text-align: center; padding: 40px; font-size: 13px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); padding: 4px 6px 0; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
