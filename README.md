@@ -16,10 +16,28 @@ two-quarter horizon.
 
 CLI binary: **`transcripts`**.
 
+## Live
+
+- **Web dashboard + PWA:** https://advis0r.up.railway.app (Watchlist / Search /
+  Signals / About; installable). API root at `/api`.
+- Deployed on Railway (Bun, `src/server.ts`), backed by the same Turso database
+  the CLI uses.
+
 ## Status
 
-This repository is an MVP scaffold implementing the architecture in
-[`docs/PRD.md`](docs/PRD.md). What is **fully implemented**:
+This repository implements the architecture in [`docs/PRD.md`](docs/PRD.md).
+What is **fully implemented and working end-to-end**:
+
+- **Live transcript ingestion** via SEC EDGAR full-text search (`transcripts
+  sync "<topic>"`) — keyless; indexes real 8-K/EX-99 exhibits & prepared remarks
+  into Turso with FTS5 and deterministic signal extraction.
+- **Offline analysis provider** (`--provider offline`): zero-dependency,
+  grounded, reproducible `StockAnalysis` from extracted signals — `discover`,
+  `analyze-company`, and the web watchlist produce real ranked output with no
+  external LLM keys.
+- **Web dashboard + PWA** and read-only HTTP API (`src/server.ts`).
+
+What is **fully implemented**:
 
 - Bun CLI with the full command surface (`init`, `search`, `discover`,
   `analyze-company`, `compare`, `screen`, `models`, `providers`, `stats`,
@@ -42,9 +60,20 @@ This repository is an MVP scaffold implementing the architecture in
 - Ranked watchlist rendering in **terminal / Markdown / JSON** with the
   mandatory disclaimer.
 
-What is **scaffolded for Phase 1/2** (interfaces + pipeline wired, crawler
-bodies are TODO): transcript ingestion crawlers (SEC exhibits, generic
-HTML/PDF, YouTube captions) and the walk-forward backtesting engine.
+What is **partial / Phase 2**: the point-in-time backtest engine is implemented
+and ranks candidates deterministically (`transcripts backtest`); realized-return
+metrics need Alpaca historical bars (set `APCA_*`). YouTube caption import is the
+one remaining ingestion source still stubbed. The OpenAI/Anthropic analysis
+providers are complete (dynamic model listing, alias resolution, schema-repair
+retry) but require a funded key; without one, use `--provider offline`.
+
+### Quick web/API tour
+
+```bash
+bun run start                        # serve dashboard + API on :8080 (PORT)
+curl localhost:8080/api/stats
+curl "localhost:8080/api/discover?topic=AI%20infrastructure&limit=10"
+```
 
 ## Quick start
 
