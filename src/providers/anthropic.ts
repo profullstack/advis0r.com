@@ -7,16 +7,15 @@ import type {
   AnalysisResult,
   CostEstimate,
   ModelDescriptor,
-  StockAnalysis,
 } from "../types.ts";
 import type { AnalysisProvider } from "./interfaces.ts";
-import { StockAnalysisSchema } from "../analysis/schema.ts";
 import {
   SYSTEM_PROMPT,
   buildUserPrompt,
   inputHash,
   promptHash,
 } from "../analysis/prompt.ts";
+import { analyzeWithRepair } from "../analysis/validate.ts";
 import { resolveModel } from "../analysis/aliases.ts";
 import { estimateTokens } from "../analysis/cost.ts";
 
@@ -69,36 +68,37 @@ export class AnthropicProvider implements AnalysisProvider {
   async analyze(request: AnalysisRequest): Promise<AnalysisResult> {
     const model = await this.resolve(request.model);
     const user = buildUserPrompt(request);
-    const res = await fetch(`${BASE}/messages`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        temperature: this.temperature,
-        system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: `${user}\n\nRespond with ONLY the JSON object, no prose, no code fences.`,
-          },
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error(`Anthropic analyze ${res.status}: ${await res.text()}`);
-    const body = (await res.json()) as any;
-    const text: string = (body.content ?? [])
-      .filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("");
-    const parsed = StockAnalysisSchema.parse(JSON.parse(stripFences(text))) as StockAnalysis;
+    const call = async (repairHint?: string): Promise<string> => {
+      const content = repairHint
+        ? `${user}\n\n${repairHint}\n\nRespond with ONLY the JSON object, no prose, no code fences.`
+        : `${user}\n\nRespond with ONLY the JSON object, no prose, no code fences.`;
+      const res = await fetch(`${BASE}/messages`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          model,
+          max_tokens: 4096,
+          temperature: this.temperature,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: "user", content }],
+        }),
+      });
+      if (!res.ok) throw new Error(`Anthropic analyze ${res.status}: ${await res.text()}`);
+      const body = (await res.json()) as any;
+      return stripFences(
+        (body.content ?? [])
+          .filter((b: any) => b.type === "text")
+          .map((b: any) => b.text)
+          .join(""),
+      );
+    };
+    const analysis = await analyzeWithRepair(call);
     return {
       provider: this.id,
       model,
       promptHash: promptHash(SYSTEM_PROMPT, user),
       inputHash: inputHash(request),
-      analysis: parsed,
-      raw: body,
+      analysis,
     };
   }
 

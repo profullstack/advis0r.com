@@ -38,8 +38,16 @@ export async function migrate(db: Client): Promise<void> {
 function splitSqlStatements(sql: string): string[] {
   return sql
     .split(/;\s*(?:\n|$)/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+    // Strip full-line `--` comments so a statement preceded by a comment (e.g.
+    // the FTS5 virtual table or the indexes) is not dropped along with it.
+    .map((chunk) =>
+      chunk
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("--"))
+        .join("\n")
+        .trim(),
+    )
+    .filter((s) => s.length > 0);
 }
 
 export function closeDb(): void {

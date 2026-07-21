@@ -58,20 +58,34 @@ export class SecFundamentalsProvider implements FundamentalsProvider {
     const body = (await res.json()) as any;
     const usd = body.facts?.["us-gaap"] ?? {};
     const shares = latestValue(body.facts?.dei?.EntityCommonStockSharesOutstanding, asOf);
-    const revenue =
-      latestValue(usd.RevenueFromContractWithCustomerExcludingAssessedTax, asOf) ??
-      latestValue(usd.Revenues, asOf);
+    const publicFloat = latestValue(body.facts?.dei?.EntityPublicFloat, asOf);
+    const revenueFact =
+      usd.RevenueFromContractWithCustomerExcludingAssessedTax ?? usd.Revenues ?? usd.SalesRevenueNet;
+    const revenue = latestValue(revenueFact, asOf);
+    const revenueGrowth = yoyGrowth(revenueFact, asOf);
     const cash = latestValue(usd.CashAndCashEquivalentsAtCarryingValue, asOf);
-    const debt = latestValue(usd.LongTermDebtNoncurrent, asOf);
+    const debt =
+      (latestValue(usd.LongTermDebtNoncurrent, asOf) ?? 0) +
+      (latestValue(usd.LongTermDebtCurrent, asOf) ?? 0);
+    const opCashFlow = latestValue(usd.NetCashProvidedByUsedInOperatingActivities, asOf);
+    // Runway: cash divided by monthly operating cash burn (only when burning).
+    const runwayMonths =
+      cash != null && opCashFlow != null && opCashFlow < 0
+        ? Math.round((cash / (Math.abs(opCashFlow) / 12)) * 10) / 10
+        : undefined;
 
     return {
       symbol,
       companyName: resolved.name,
       cik: resolved.cik,
       sharesOutstanding: shares ?? undefined,
+      publicFloat: publicFloat ?? undefined,
       revenue: revenue ?? undefined,
+      revenueGrowth,
       cashBalance: cash ?? undefined,
-      totalDebt: debt ?? undefined,
+      totalDebt: debt || undefined,
+      freeCashFlow: opCashFlow ?? undefined,
+      runwayMonths,
       asOf: nowIso,
       source: this.id,
     };
@@ -120,4 +134,28 @@ function latestValue(fact: any, asOf?: string): number | null {
     .sort((a, b) => String(a.end).localeCompare(String(b.end)));
   const last = eligible.at(-1);
   return typeof last?.val === "number" ? last.val : null;
+}
+
+/**
+ * Year-over-year growth (%) from annual (FY) duration facts, point-in-time.
+ * Uses the two most recent full-year (10-K) frames on/before `asOf`.
+ */
+function yoyGrowth(fact: any, asOf?: string): number | undefined {
+  if (!fact?.units) return undefined;
+  const unitKey = Object.keys(fact.units)[0];
+  if (!unitKey) return undefined;
+  const cutoff = asOf?.slice(0, 10);
+  const annual = (fact.units[unitKey] as any[])
+    .filter((e) => e.form === "10-K" && e.fp === "FY" && e.start && e.end)
+    .filter((e) => !cutoff || e.end <= cutoff)
+    .filter((e) => durationDays(e.start, e.end) >= 300)
+    .sort((a, b) => String(a.end).localeCompare(String(b.end)));
+  const latest = annual.at(-1);
+  const prior = annual.at(-2);
+  if (!latest || !prior || typeof latest.val !== "number" || !prior.val) return undefined;
+  return Math.round(((latest.val - prior.val) / Math.abs(prior.val)) * 1000) / 10;
+}
+
+function durationDays(start: string, end: string): number {
+  return (Date.parse(end) - Date.parse(start)) / 86_400_000;
 }

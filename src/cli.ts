@@ -145,18 +145,36 @@ program
 
 // --- sync (ingestion) -----------------------------------------------------
 program
-  .command("sync")
-  .description("Crawl & index transcripts from configured providers.")
-  .option("--topic <topic>")
-  .action(async () => {
-    await withApp(async ({ registry }) => {
-      console.log(
-        `Transcript providers: ${registry.transcripts.map((p) => p.id).join(", ")}`,
+  .command("sync <topic>")
+  .description("Crawl & index transcripts/exhibits from providers (SEC EDGAR live).")
+  .option("--from <date>", "start date (ISO)")
+  .option("--to <date>", "end date (ISO)")
+  .option("--limit <n>", "max documents per provider", "40")
+  .option("--seeds <list>", "generic-html seeds as TICKER=URL,TICKER=URL")
+  .action(async (topic: string, opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const { ingest } = await import("./pipeline/ingest.ts");
+      const seeds = opts.seeds ? String(opts.seeds).split(",") : undefined;
+      const result = await ingest(
+        db,
+        config,
+        registry.transcripts,
+        {
+          topic,
+          from: opts.from,
+          to: opts.to,
+          limit: Number(opts.limit) || 40,
+          tickers: seeds,
+        },
+        (msg) => console.error(`  ${msg}`),
       );
       console.log(
-        "Ingestion crawlers are scaffolded (Phase 1 TODO). Interfaces and pipeline are wired;\n" +
-          "implement provider.search()/parse() to populate the index.",
+        `Indexed ${result.documents} document(s), ${result.segments} segment(s), ${result.signals} signal(s).`,
       );
+      if (result.errors.length) {
+        console.error(`${result.errors.length} error(s):`);
+        for (const e of result.errors.slice(0, 5)) console.error(`  - ${e}`);
+      }
     });
   });
 
@@ -435,13 +453,38 @@ program
   .option("--as-of <date>")
   .option("--price-max <n>")
   .option("--horizon-quarters <n>", "1 or 2", "2")
+  .option("--price-min <n>")
   .option("--top <n>", "top-k", "20")
-  .action(async () => {
-    console.log(
-      "Backtesting is a Phase 2 deliverable (PRD §18). The point-in-time data plumbing\n" +
-        "(as-of filings via SEC, adjustment-aware Alpaca bars) is in place; the walk-forward\n" +
-        "engine and metrics are the next milestone.",
-    );
+  .option("--json", "emit JSON")
+  .action(async (opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const { runBacktest } = await import("./pipeline/backtest.ts");
+      const metrics = await runBacktest(db, config, registry, {
+        topic: opts.topic ?? "",
+        asOf: opts.asOf ?? todayIso(),
+        horizonQuarters: (Number(opts.horizonQuarters) === 1 ? 1 : 2) as 1 | 2,
+        top: Number(opts.top) || 20,
+        priceMax: parseAbbrevNumber(opts.priceMax),
+        priceMin: parseAbbrevNumber(opts.priceMin),
+      });
+      if (opts.json) {
+        console.log(JSON.stringify({ ...metrics, disclaimer: DISCLAIMER }, null, 2));
+        return;
+      }
+      console.log(`Backtest — ${metrics.topic} as of ${metrics.asOf} (${metrics.horizonQuarters}Q, strategy ${metrics.strategyVersion})`);
+      if (metrics.note) console.log(`Note: ${metrics.note}`);
+      if (metrics.positions.length) {
+        console.log(`\nPositions (${metrics.count}):`);
+        for (const p of metrics.positions) {
+          console.log(`  ${p.ticker}: ${p.entryPrice} (${p.entryDate}) -> ${p.exitPrice} (${p.exitDate}) = ${p.returnPct}%  [signal ${p.signalScore}]`);
+        }
+        console.log(
+          `\nMean ${metrics.meanReturnPct}%  Median ${metrics.medianReturnPct}%  Win ${metrics.winRatePct}%  ` +
+            `MaxDD ${metrics.maxDrawdownPct}%  Hit25 ${metrics.hitRate25Pct}%  Hit50 ${metrics.hitRate50Pct}%  Hit100 ${metrics.hitRate100Pct}%`,
+        );
+      }
+      console.log(`\n${DISCLAIMER}`);
+    });
   });
 
 // --- export ---------------------------------------------------------------

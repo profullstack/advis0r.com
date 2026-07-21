@@ -7,16 +7,15 @@ import type {
   AnalysisResult,
   CostEstimate,
   ModelDescriptor,
-  StockAnalysis,
 } from "../types.ts";
 import type { AnalysisProvider } from "./interfaces.ts";
-import { StockAnalysisSchema } from "../analysis/schema.ts";
 import {
   SYSTEM_PROMPT,
   buildUserPrompt,
   inputHash,
   promptHash,
 } from "../analysis/prompt.ts";
+import { analyzeWithRepair } from "../analysis/validate.ts";
 import { resolveModel } from "../analysis/aliases.ts";
 import { estimateTokens } from "../analysis/cost.ts";
 
@@ -68,30 +67,33 @@ export class OpenAIProvider implements AnalysisProvider {
   async analyze(request: AnalysisRequest): Promise<AnalysisResult> {
     const model = await this.resolve(request.model);
     const user = buildUserPrompt(request);
-    const res = await fetch(`${BASE}/chat/completions`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify({
-        model,
-        temperature: this.temperature,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: user },
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error(`OpenAI analyze ${res.status}: ${await res.text()}`);
-    const body = (await res.json()) as any;
-    const content = body.choices?.[0]?.message?.content ?? "{}";
-    const parsed = StockAnalysisSchema.parse(JSON.parse(content)) as StockAnalysis;
+    const call = async (repairHint?: string): Promise<string> => {
+      const messages: any[] = [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: user },
+      ];
+      if (repairHint) messages.push({ role: "user", content: repairHint });
+      const res = await fetch(`${BASE}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          model,
+          temperature: this.temperature,
+          response_format: { type: "json_object" },
+          messages,
+        }),
+      });
+      if (!res.ok) throw new Error(`OpenAI analyze ${res.status}: ${await res.text()}`);
+      const body = (await res.json()) as any;
+      return body.choices?.[0]?.message?.content ?? "{}";
+    };
+    const analysis = await analyzeWithRepair(call);
     return {
       provider: this.id,
       model,
       promptHash: promptHash(SYSTEM_PROMPT, user),
       inputHash: inputHash(request),
-      analysis: parsed,
-      raw: body,
+      analysis,
     };
   }
 

@@ -30,6 +30,20 @@ export interface AnalyzeOptions {
   model: string;
   criteria: ScreenCriteria;
   persist?: boolean;
+  /** When true, a ticker with no Alpaca market data is excluded instead of degraded. */
+  requireMarketData?: boolean;
+}
+
+/** Drop price/liquidity/technical filters (used when market data is absent). */
+function stripMarketCriteria(c: ScreenCriteria): ScreenCriteria {
+  return {
+    exchanges: c.exchanges,
+    excludeOtc: c.excludeOtc,
+    excludeBankrupt: c.excludeBankrupt,
+    excludeGoingConcern: c.excludeGoingConcern,
+    marketCapMin: c.marketCapMin,
+    marketCapMax: c.marketCapMax,
+  };
 }
 
 function indicatorConfig(config: AppConfig): IndicatorConfig {
@@ -70,18 +84,37 @@ export async function analyzeTicker(
     adjustment: config.alpaca.adjustment,
     feed: config.alpaca.feed,
   };
-  const bars = await registry.alpaca.getBars(barsReq);
-  const [snapshot] = await registry.alpaca.getSnapshots([ticker]);
-  const [asset] = await registry.alpaca.getAssets([ticker]);
+  // Market data via Alpaca is optional: when credentials are absent (or the
+  // API errors), the pipeline degrades gracefully to transcript + SEC evidence
+  // and records the gap in missingData rather than failing (PRD §8.4, §27).
+  let bars: Awaited<ReturnType<typeof registry.alpaca.getBars>> = [];
+  let snapshot: Awaited<ReturnType<typeof registry.alpaca.getSnapshots>>[number] | undefined;
+  let asset: Awaited<ReturnType<typeof registry.alpaca.getAssets>>[number] | undefined;
+  let marketDataAvailable = true;
+  try {
+    bars = await registry.alpaca.getBars(barsReq);
+    [snapshot] = await registry.alpaca.getSnapshots([ticker]);
+    [asset] = await registry.alpaca.getAssets([ticker]);
+  } catch (err) {
+    marketDataAvailable = false;
+    if (opts.requireMarketData) {
+      return { ticker, filtered: true, filterReasons: [`market data unavailable: ${String(err)}`] };
+    }
+  }
   const facts = await registry.fundamentals.getCompanyFacts(ticker, opts.asOf);
 
   const technical = bars.length ? calculateIndicators(bars, icfg) : undefined;
   const technicalScore =
     technical ? scoreTechnicalSetup(technical, opts.horizonQuarters) : undefined;
 
-  // 2. Deterministic filters — before any LLM cost.
+  // 2. Deterministic filters — before any LLM cost. Price/liquidity/technical
+  // filters are only applied when market data is present; otherwise they are
+  // skipped (not silently failed).
+  const effectiveCriteria = marketDataAvailable
+    ? opts.criteria
+    : stripMarketCriteria(opts.criteria);
   const candidate: Candidate = { symbol: ticker, asset, snapshot, facts, technical };
-  const filter = applyFilters(candidate, opts.criteria);
+  const filter = applyFilters(candidate, effectiveCriteria);
   if (!filter.passed) {
     return { ticker, filtered: true, filterReasons: filter.reasons };
   }
@@ -109,6 +142,10 @@ export async function analyzeTicker(
     facts,
     snapshot,
   });
+
+  if (!marketDataAvailable && !result.analysis.missingData.includes("Alpaca market/technical data")) {
+    result.analysis.missingData.push("Alpaca market/technical data");
+  }
 
   // 5. Deterministic composite score.
   const composite = composeScore({
