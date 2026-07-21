@@ -18,10 +18,13 @@
 import { join, normalize } from "node:path";
 import { loadConfig } from "./config.ts";
 import { getDb, migrate } from "./db/index.ts";
-import { buildRegistry } from "./registry.ts";
+import { buildRegistry, getAiProvider } from "./registry.ts";
 import { analyzeTicker } from "./pipeline/analyze.ts";
+import { calculateIndicators, scoreTechnicalSetup } from "./technical/indicators.ts";
+import { buildEvidence } from "./evidence/builder.ts";
+import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
-import type { RankedCandidate } from "./types.ts";
+import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
 const config = loadConfig();
 const db = getDb(config);
@@ -30,6 +33,92 @@ const registry = buildRegistry(config);
 
 const port = Number(process.env.PORT ?? 8080);
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
+
+const INDICATOR_CONFIG: IndicatorConfig = {
+  movingAverages: config.technical.movingAverages,
+  emaPeriods: config.technical.emaPeriods,
+  rsiPeriod: config.technical.rsiPeriod,
+  macd: { fast: config.technical.macdFast, slow: config.technical.macdSlow, signal: config.technical.macdSignal },
+  bollinger: { period: config.technical.bollingerPeriod, stdDev: config.technical.bollingerStddev },
+  atrPeriod: config.technical.atrPeriod,
+  relativeVolumePeriod: config.technical.relativeVolumePeriod,
+};
+
+/** Full detail for one ticker: facts, quote, technicals, bars, signals, analysis. */
+async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
+  const sym = symbol.toUpperCase();
+  const asOf = new Date().toISOString();
+  const start = new Date(Date.now() - 400 * 86_400_000).toISOString();
+
+  let bars: Awaited<ReturnType<typeof registry.alpaca.getBars>> = [];
+  let snapshot: Awaited<ReturnType<typeof registry.alpaca.getSnapshots>>[number] | undefined;
+  let asset: Awaited<ReturnType<typeof registry.alpaca.getAssets>>[number] | undefined;
+  let marketError: string | undefined;
+  try {
+    bars = await registry.alpaca.getBars({ symbols: [sym], timeframe: "1Day", start, end: asOf });
+    [snapshot] = await registry.alpaca.getSnapshots([sym]);
+    [asset] = await registry.alpaca.getAssets([sym]);
+  } catch (err) {
+    marketError = String(err);
+  }
+
+  const facts = await registry.fundamentals.getCompanyFacts(sym, asOf);
+  const lastPrice = snapshot?.latestTrade?.price ?? snapshot?.dailyBar?.close ?? bars.at(-1)?.close;
+  if (facts.marketCap == null && facts.sharesOutstanding && lastPrice) {
+    facts.marketCap = facts.sharesOutstanding * lastPrice;
+  }
+
+  const technical = bars.length ? calculateIndicators(bars, INDICATOR_CONFIG) : undefined;
+  const technicalScore = technical ? scoreTechnicalSetup(technical, 2) : undefined;
+
+  const evidence = await buildEvidence(db, sym, { snapshot, facts, technical });
+  let analysis: unknown;
+  let overallScore: number | undefined;
+  let confidence: number | undefined;
+  let classification: string | undefined;
+  try {
+    const offline = getAiProvider(registry, "offline");
+    const result = await offline.analyze({
+      ticker: sym, topic: "detail", asOf, horizonQuarters: 2,
+      model: "offline-deterministic-v1", evidence: evidence.items, technical, technicalScore, facts, snapshot,
+    });
+    const composite = composeScore({
+      analysis: result.analysis, technicalScore: technicalScore?.score,
+      independentSources: evidence.independentSources, missingDataCount: result.analysis.missingData.length,
+    });
+    analysis = result.analysis;
+    overallScore = composite.overall;
+    confidence = composite.confidence;
+    classification = classifyRisk(composite.overall, composite.confidence, lastPrice);
+  } catch { /* analysis optional */ }
+
+  const sigRs = await db.execute({
+    sql: `SELECT signal_type, direction, strength, specificity, quote, event_date, source_url
+          FROM signals WHERE ticker = ? ORDER BY event_date DESC LIMIT 60`,
+    args: [sym],
+  });
+
+  return {
+    ticker: sym,
+    companyName: facts.companyName ?? asset?.name ?? sym,
+    exchange: asset?.exchange,
+    lastPrice,
+    priceTimestamp: snapshot?.latestTrade?.timestamp,
+    delayed: snapshot?.delayed ?? true,
+    marketSource: registry.marketSource,
+    marketError,
+    facts,
+    technical,
+    technicalScore,
+    overallScore,
+    confidence,
+    classification,
+    analysis,
+    bars: bars.map((b) => ({ t: b.timestamp.slice(0, 10), o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume })),
+    signals: sigRs.rows,
+    disclaimer: DISCLAIMER,
+  };
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -88,6 +177,7 @@ const server = Bun.serve({
             "GET /api/tickers": "tickers present in the index",
             "GET /api/search?q=&limit=": "full-text search over transcript segments",
             "GET /api/signals?ticker=": "extracted signals for a ticker",
+            "GET /api/ticker?symbol=": "full detail: quote, technicals, bars, fundamentals, signals, analysis",
             "GET /api/discover?topic=&provider=offline&horizon=2&limit=": "ranked watchlist",
           },
           disclaimer: DISCLAIMER,
@@ -120,6 +210,12 @@ const server = Bun.serve({
           args: [q, limit],
         });
         return json({ query: q, results: rs.rows });
+      }
+
+      if (p === "/api/ticker") {
+        const symbol = url.searchParams.get("symbol");
+        if (!symbol) return json({ error: "missing ?symbol=" }, 400);
+        return json(await tickerDetail(symbol));
       }
 
       if (p === "/api/signals") {

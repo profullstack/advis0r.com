@@ -103,6 +103,12 @@ export async function analyzeTicker(
   }
   const facts = await registry.fundamentals.getCompanyFacts(ticker, opts.asOf);
 
+  // Derive market cap from SEC shares outstanding × last price when both exist.
+  const lastPriceForCap = snapshot?.latestTrade?.price ?? snapshot?.dailyBar?.close;
+  if (facts.marketCap == null && facts.sharesOutstanding && lastPriceForCap) {
+    facts.marketCap = facts.sharesOutstanding * lastPriceForCap;
+  }
+
   const technical = bars.length ? calculateIndicators(bars, icfg) : undefined;
   const technicalScore =
     technical ? scoreTechnicalSetup(technical, opts.horizonQuarters) : undefined;

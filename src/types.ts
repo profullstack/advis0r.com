@@ -106,7 +106,7 @@ export interface Contradiction {
 
 // --- Market data (PRD §7.3, §22) ------------------------------------------
 
-export type AlpacaFeed = "iex" | "sip" | "otc";
+export type AlpacaFeed = "iex" | "sip" | "otc" | "yahoo";
 export type AdjustmentMode = "raw" | "split" | "dividend" | "all";
 export type BarTimeframe =
   | "1Min"
