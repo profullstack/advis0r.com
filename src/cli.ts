@@ -1,0 +1,501 @@
+#!/usr/bin/env bun
+/**
+ * transcript-search CLI (PRD §5, §24). Binary name: `transcripts`.
+ */
+import { Command } from "commander";
+import { loadConfig, configPath, type AppConfig } from "./config.ts";
+import { getDb, migrate, closeDb } from "./db/index.ts";
+import { buildRegistry } from "./registry.ts";
+import { analyzeTicker } from "./pipeline/analyze.ts";
+import { renderTerminal, renderMarkdown, renderJson } from "./ranking/report.ts";
+import { applyFilters, type Candidate, type ScreenCriteria } from "./screen/filters.ts";
+import { calculateIndicators, scoreTechnicalSetup } from "./technical/indicators.ts";
+import { DISCLAIMER } from "./compliance.ts";
+import { parseAbbrevNumber, parseList, todayIso } from "./util/parse.ts";
+import type { RankedCandidate } from "./types.ts";
+
+const program = new Command();
+program
+  .name("transcripts")
+  .description(
+    "Discover, index, and analyze executive communications into an evidence-backed stock watchlist.",
+  )
+  .version("2.0.0");
+
+function screenCriteriaFromOpts(opts: any, config: AppConfig): ScreenCriteria {
+  return {
+    priceMin: parseAbbrevNumber(opts.priceMin) ?? config.screen.priceMin,
+    priceMax: parseAbbrevNumber(opts.priceMax) ?? config.screen.priceMax,
+    marketCapMin: parseAbbrevNumber(opts.marketCapMin) ?? config.screen.marketCapMin,
+    marketCapMax: parseAbbrevNumber(opts.marketCapMax) ?? config.screen.marketCapMax,
+    avgVolumeMin: parseAbbrevNumber(opts.avgVolumeMin) ?? config.screen.avgVolumeMin,
+    avgDollarVolumeMin:
+      parseAbbrevNumber(opts.avgDollarVolumeMin) ?? config.screen.avgDollarVolumeMin,
+    maxSpreadPercent: parseAbbrevNumber(opts.maxSpreadPercent) ?? config.risk.maxBidAskSpreadPercent,
+    exchanges: parseList(opts.exchange),
+    excludeOtc: opts.excludeOtc ?? config.screen.excludeOtc,
+    excludeBankrupt: opts.excludeBankrupt ?? config.screen.excludeBankrupt,
+    excludeGoingConcern: opts.excludeGoingConcern ?? config.screen.excludeGoingConcern,
+    rsiMin: parseAbbrevNumber(opts.rsiMin),
+    rsiMax: parseAbbrevNumber(opts.rsiMax),
+    aboveSma20: opts.aboveSma_20 ?? opts.aboveSma20,
+    aboveSma50: opts.aboveSma_50 ?? opts.aboveSma50,
+    aboveSma200: opts.aboveSma_200 ?? opts.aboveSma200,
+    goldenCross: opts.goldenCross,
+    relativeVolumeMin: parseAbbrevNumber(opts.relativeVolumeMin),
+    momentum20dMin: parseAbbrevNumber(opts.momentum_20dMin ?? opts.momentum20dMin),
+    momentum60dMin: parseAbbrevNumber(opts.momentum_60dMin ?? opts.momentum60dMin),
+    trend: opts.trend,
+  };
+}
+
+/** Shared discover/analyze option set. */
+function addScreenOptions(cmd: Command): Command {
+  return cmd
+    .option("--from <date>", "start date (ISO)")
+    .option("--to <date>", "end date (ISO)")
+    .option("--as-of <date>", "point-in-time as-of date (ISO)")
+    .option("--price-min <n>")
+    .option("--price-max <n>")
+    .option("--market-cap-min <n>", "e.g. 25m")
+    .option("--market-cap-max <n>", "e.g. 5b")
+    .option("--avg-volume-min <n>")
+    .option("--avg-dollar-volume-min <n>")
+    .option("--max-spread-percent <n>")
+    .option("--exchange <list>", "NASDAQ,NYSE,AMEX")
+    .option("--exclude-otc")
+    .option("--exclude-bankrupt")
+    .option("--exclude-going-concern")
+    .option("--above-sma-50")
+    .option("--above-sma-200")
+    .option("--relative-volume-min <n>")
+    .option("--momentum-60d-min <n>")
+    .option("--trend <trend>", "bullish|neutral|bearish")
+    .option("--horizon-quarters <n>", "1 or 2", "2")
+    .option("--provider <id>", "openai|anthropic")
+    .option("--model <id>", "explicit id or alias fast|balanced|deep|latest")
+    .option("--tickers <list>", "explicit candidate tickers (comma-separated)")
+    .option("--limit <n>", "max candidates", "25")
+    .option("--json", "emit JSON")
+    .option("--markdown", "emit Markdown")
+    .option("--include-evidence")
+    .option("--include-score-breakdown");
+}
+
+async function withApp<T>(fn: (ctx: {
+  config: AppConfig;
+  db: ReturnType<typeof getDb>;
+  registry: ReturnType<typeof buildRegistry>;
+}) => Promise<T>): Promise<T> {
+  const config = loadConfig();
+  const db = getDb(config);
+  await migrate(db);
+  const registry = buildRegistry(config);
+  try {
+    return await fn({ config, db, registry });
+  } finally {
+    closeDb();
+  }
+}
+
+// --- init -----------------------------------------------------------------
+program
+  .command("init")
+  .description("Create/upgrade the database schema (FTS5).")
+  .action(async () => {
+    await withApp(async ({ config }) => {
+      console.log(`Database ready: ${config.databaseUrl}`);
+      console.log(`Config: ${configPath()}`);
+    });
+  });
+
+// --- search ---------------------------------------------------------------
+program
+  .command("search <query>")
+  .description("Full-text search indexed transcript segments (FTS5).")
+  .option("--from <date>")
+  .option("--to <date>")
+  .option("--limit <n>", "max results", "20")
+  .action(async (query: string, opts) => {
+    await withApp(async ({ db }) => {
+      const limit = Number(opts.limit) || 20;
+      try {
+        const rs = await db.execute({
+          sql: `SELECT text, speaker, ticker, event_date
+                FROM segments_fts
+                WHERE segments_fts MATCH ?
+                  AND (? IS NULL OR event_date >= ?)
+                  AND (? IS NULL OR event_date <= ?)
+                LIMIT ?`,
+          args: [query, opts.from ?? null, opts.from ?? null, opts.to ?? null, opts.to ?? null, limit],
+        });
+        if (rs.rows.length === 0) {
+          console.log("No matches. (Ingest transcripts with `transcripts sync` first.)");
+          return;
+        }
+        for (const row of rs.rows) {
+          console.log(`[${row.event_date}] ${row.ticker ?? "?"} ${row.speaker ?? ""}`);
+          console.log(`  ${String(row.text).slice(0, 240)}`);
+        }
+      } catch (err) {
+        console.error(`Search failed: ${String(err)}`);
+      }
+    });
+  });
+
+// --- sync (ingestion) -----------------------------------------------------
+program
+  .command("sync")
+  .description("Crawl & index transcripts from configured providers.")
+  .option("--topic <topic>")
+  .action(async () => {
+    await withApp(async ({ registry }) => {
+      console.log(
+        `Transcript providers: ${registry.transcripts.map((p) => p.id).join(", ")}`,
+      );
+      console.log(
+        "Ingestion crawlers are scaffolded (Phase 1 TODO). Interfaces and pipeline are wired;\n" +
+          "implement provider.search()/parse() to populate the index.",
+      );
+    });
+  });
+
+// --- discover -------------------------------------------------------------
+addScreenOptions(
+  program.command("discover <topic>").description("Discover candidate stocks from transcript signals + market data."),
+).action(async (topic: string, opts) => {
+  await withApp(async ({ config, db, registry }) => {
+    const asOf = opts.asOf ?? opts.to ?? todayIso();
+    const horizon = (Number(opts.horizonQuarters) === 1 ? 1 : 2) as 1 | 2;
+    const criteria = screenCriteriaFromOpts(opts, config);
+    const provider = opts.provider ?? config.ai.defaultProvider;
+    const model = opts.model ?? config.ai.defaultModelAlias;
+    const limit = Number(opts.limit) || 25;
+
+    const tickers = await resolveCandidateTickers(db, topic, opts.tickers, limit);
+    if (tickers.length === 0) {
+      console.log(
+        "No candidate tickers. Provide --tickers, or index transcripts (`sync`) so signals\n" +
+          "can be matched to the topic.",
+      );
+      return;
+    }
+
+    const ranked: RankedCandidate[] = [];
+    for (const ticker of tickers) {
+      try {
+        const outcome = await analyzeTicker(db, config, registry, ticker, {
+          topic,
+          asOf,
+          from: opts.from,
+          to: opts.to,
+          horizonQuarters: horizon,
+          provider,
+          model,
+          criteria,
+          persist: true,
+        });
+        if (outcome.filtered) {
+          console.error(`- ${ticker}: filtered (${outcome.filterReasons.join("; ")})`);
+        } else if (outcome.candidate) {
+          ranked.push(outcome.candidate);
+        }
+      } catch (err) {
+        console.error(`- ${ticker}: error ${String(err)}`);
+      }
+    }
+
+    ranked.sort((a, b) => b.overallScore - a.overallScore);
+    ranked.forEach((c, i) => (c.rank = i + 1));
+
+    const header = {
+      topic,
+      from: opts.from,
+      to: opts.to,
+      priceMin: criteria.priceMin,
+      priceMax: criteria.priceMax,
+      horizonQuarters: horizon,
+    };
+    if (opts.json) {
+      console.log(renderJson(ranked, header, {
+        includeEvidence: opts.includeEvidence,
+        includeScoreBreakdown: opts.includeScoreBreakdown,
+      }));
+    } else if (opts.markdown) {
+      console.log(renderMarkdown(ranked, header));
+    } else {
+      console.log(renderTerminal(ranked, header));
+    }
+  });
+});
+
+// --- analyze-company ------------------------------------------------------
+addScreenOptions(
+  program
+    .command("analyze-company <ticker>")
+    .description("Deep analysis of one company over the horizon."),
+)
+  .option("--compare-prior-period")
+  .option("--include-competitors")
+  .option("--include-suppliers")
+  .action(async (ticker: string, opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const asOf = opts.asOf ?? opts.to ?? todayIso();
+      const horizon = (Number(opts.horizonQuarters) === 1 ? 1 : 2) as 1 | 2;
+      const criteria = screenCriteriaFromOpts(opts, config);
+      // analyze-company does not exclude on screen filters by default.
+      const outcome = await analyzeTicker(db, config, registry, ticker.toUpperCase(), {
+        topic: opts.topic ?? ticker,
+        asOf,
+        from: opts.from,
+        to: opts.to,
+        horizonQuarters: horizon,
+        provider: opts.provider ?? config.ai.defaultProvider,
+        model: opts.model ?? config.ai.defaultModelAlias,
+        criteria: { ...criteria, priceMin: undefined, priceMax: undefined },
+        persist: true,
+      });
+      if (outcome.candidate) {
+        const c = outcome.candidate;
+        c.rank = 1;
+        console.log(
+          opts.json
+            ? renderJson([c], { topic: opts.topic ?? ticker, horizonQuarters: horizon }, { includeEvidence: true })
+            : renderMarkdown([c], { topic: opts.topic ?? ticker, horizonQuarters: horizon }),
+        );
+      } else {
+        console.log(`No analysis produced for ${ticker}: ${outcome.filterReasons.join("; ")}`);
+      }
+    });
+  });
+
+// --- compare --------------------------------------------------------------
+program
+  .command("compare <tickers...>")
+  .description("Compare companies on a topic.")
+  .option("--topic <topic>")
+  .option("--from <date>")
+  .option("--to <date>")
+  .option("--provider <id>")
+  .option("--model <id>")
+  .action(async (tickers: string[], opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const asOf = opts.to ?? todayIso();
+      const results: RankedCandidate[] = [];
+      for (const t of tickers) {
+        const outcome = await analyzeTicker(db, config, registry, t.toUpperCase(), {
+          topic: opts.topic ?? "comparison",
+          asOf,
+          from: opts.from,
+          to: opts.to,
+          horizonQuarters: 2,
+          provider: opts.provider ?? config.ai.defaultProvider,
+          model: opts.model ?? config.ai.defaultModelAlias,
+          criteria: {},
+          persist: true,
+        });
+        if (outcome.candidate) results.push(outcome.candidate);
+      }
+      results.sort((a, b) => b.overallScore - a.overallScore);
+      results.forEach((c, i) => (c.rank = i + 1));
+      console.log(renderTerminal(results, { topic: opts.topic ?? "comparison", horizonQuarters: 2 }));
+    });
+  });
+
+// --- screen (deterministic only, no LLM) ----------------------------------
+addScreenOptions(
+  program.command("screen").description("Deterministic screen (no LLM): filters on price/liquidity/technical."),
+).action(async (opts) => {
+  await withApp(async ({ config, registry }) => {
+    const tickers = parseList(opts.tickers);
+    if (!tickers?.length) {
+      console.log("Provide --tickers to screen (universe crawl is Phase 2).");
+      return;
+    }
+    const criteria = screenCriteriaFromOpts(opts, config);
+    const icfg = {
+      movingAverages: config.technical.movingAverages,
+      emaPeriods: config.technical.emaPeriods,
+      rsiPeriod: config.technical.rsiPeriod,
+      macd: { fast: config.technical.macdFast, slow: config.technical.macdSlow, signal: config.technical.macdSignal },
+      bollinger: { period: config.technical.bollingerPeriod, stdDev: config.technical.bollingerStddev },
+      atrPeriod: config.technical.atrPeriod,
+      relativeVolumePeriod: config.technical.relativeVolumePeriod,
+    };
+    for (const ticker of tickers) {
+      const bars = await registry.alpaca.getBars({
+        symbols: [ticker],
+        timeframe: "1Day",
+        limit: config.technical.lookbackDays,
+        feed: config.alpaca.feed,
+      });
+      const [snapshot] = await registry.alpaca.getSnapshots([ticker]);
+      const [asset] = await registry.alpaca.getAssets([ticker]);
+      const facts = await registry.fundamentals.getCompanyFacts(ticker);
+      const technical = bars.length ? calculateIndicators(bars, icfg) : undefined;
+      const tscore = technical ? scoreTechnicalSetup(technical, 2) : undefined;
+      const candidate: Candidate = { symbol: ticker, asset, snapshot, facts, technical };
+      const res = applyFilters(candidate, criteria);
+      console.log(
+        `${ticker}: ${res.passed ? "PASS" : "EXCLUDE"} techScore=${tscore?.score ?? "n/a"}` +
+          (res.passed ? "" : ` (${res.reasons.join("; ")})`),
+      );
+    }
+  });
+});
+
+// --- models ---------------------------------------------------------------
+const models = program.command("models").description("Model discovery (PRD §8.1).");
+models
+  .command("list")
+  .option("--provider <id>", "openai|anthropic")
+  .action(async (opts) => {
+    await withApp(async ({ registry }) => {
+      const ids = opts.provider ? [opts.provider] : [...registry.ai.keys()];
+      for (const id of ids) {
+        const p = registry.ai.get(id);
+        if (!p) continue;
+        try {
+          const list = await p.listModels();
+          console.log(`\n${id} (${list.length} models):`);
+          for (const m of list.slice(0, 40)) console.log(`  ${m.id}${m.createdAt ? `  (${m.createdAt.slice(0, 10)})` : ""}`);
+        } catch (err) {
+          console.error(`  ${id}: ${String(err)}`);
+        }
+      }
+    });
+  });
+models
+  .command("refresh")
+  .action(async () => {
+    await withApp(async ({ registry }) => {
+      for (const [id, p] of registry.ai) {
+        try {
+          const list = await p.listModels();
+          console.log(`${id}: ${list.length} models cached.`);
+        } catch (err) {
+          console.error(`${id}: ${String(err)}`);
+        }
+      }
+    });
+  });
+models
+  .command("resolve <alias>")
+  .option("--provider <id>", "openai|anthropic", "openai")
+  .action(async (alias: string, opts) => {
+    await withApp(async ({ registry }) => {
+      const p = registry.ai.get(opts.provider);
+      if (!p) return console.error(`Unknown provider ${opts.provider}`);
+      const { resolveModel } = await import("./analysis/aliases.ts");
+      const list = await p.listModels();
+      const hints =
+        opts.provider === "anthropic"
+          ? { deep: /opus/, fast: /haiku/, balanced: /sonnet/ }
+          : { deep: /^(o[0-9]|gpt-[0-9])/, fast: /mini|nano/, balanced: /gpt-[0-9]/ };
+      console.log(resolveModel(alias, list, hints));
+    });
+  });
+
+// --- providers ------------------------------------------------------------
+program
+  .command("providers")
+  .description("List configured providers.")
+  .action(async () => {
+    await withApp(async ({ registry }) => {
+      console.log("AI:", [...registry.ai.keys()].join(", "));
+      console.log("Market data: alpaca");
+      console.log("Fundamentals:", registry.fundamentals.id);
+      console.log("Transcripts:", registry.transcripts.map((p) => p.id).join(", "));
+    });
+  });
+
+// --- stats ----------------------------------------------------------------
+program
+  .command("stats")
+  .description("Show database coverage stats.")
+  .action(async () => {
+    await withApp(async ({ db }) => {
+      const tables = ["documents", "transcripts", "signals", "analyses", "market_bars"];
+      for (const t of tables) {
+        try {
+          const rs = await db.execute(`SELECT COUNT(*) AS n FROM ${t}`);
+          console.log(`${t}: ${rs.rows[0]?.n ?? 0}`);
+        } catch {
+          console.log(`${t}: (missing)`);
+        }
+      }
+    });
+  });
+
+// --- backtest (Phase 2 scaffold) ------------------------------------------
+program
+  .command("backtest")
+  .description("Point-in-time backtest (Phase 2; scaffolded).")
+  .option("--topic <topic>")
+  .option("--as-of <date>")
+  .option("--price-max <n>")
+  .option("--horizon-quarters <n>", "1 or 2", "2")
+  .option("--top <n>", "top-k", "20")
+  .action(async () => {
+    console.log(
+      "Backtesting is a Phase 2 deliverable (PRD §18). The point-in-time data plumbing\n" +
+        "(as-of filings via SEC, adjustment-aware Alpaca bars) is in place; the walk-forward\n" +
+        "engine and metrics are the next milestone.",
+    );
+  });
+
+// --- export ---------------------------------------------------------------
+program
+  .command("export <ticker>")
+  .description("Export the latest stored analysis for a ticker as JSON.")
+  .action(async (ticker: string) => {
+    await withApp(async ({ db }) => {
+      const rs = await db.execute({
+        sql: `SELECT output_json, provider, model, as_of, overall_score, confidence
+              FROM analyses WHERE ticker = ? ORDER BY created_at DESC LIMIT 1`,
+        args: [ticker.toUpperCase()],
+      });
+      if (rs.rows.length === 0) return console.log(`No stored analysis for ${ticker}.`);
+      const row = rs.rows[0]!;
+      console.log(
+        JSON.stringify(
+          {
+            provider: row.provider,
+            model: row.model,
+            asOf: row.as_of,
+            overallScore: row.overall_score,
+            confidence: row.confidence,
+            analysis: JSON.parse(String(row.output_json)),
+            disclaimer: DISCLAIMER,
+          },
+          null,
+          2,
+        ),
+      );
+    });
+  });
+
+async function resolveCandidateTickers(
+  db: ReturnType<typeof getDb>,
+  topic: string,
+  explicit: string | undefined,
+  limit: number,
+): Promise<string[]> {
+  const fromOpt = parseList(explicit);
+  if (fromOpt?.length) return fromOpt.slice(0, limit);
+  // Otherwise derive from indexed transcript signals via FTS on the topic.
+  try {
+    const rs = await db.execute({
+      sql: `SELECT DISTINCT ticker FROM segments_fts WHERE segments_fts MATCH ? LIMIT ?`,
+      args: [topic, limit],
+    });
+    return rs.rows.map((r) => String(r.ticker)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+program.parseAsync(process.argv).catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

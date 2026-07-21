@@ -1,0 +1,75 @@
+# transcript-search config (PRD §23). Copy to ~/.config/transcripts/config.toml
+# Secrets (API keys, DB auth token) go in the environment, NOT here.
+
+database = "~/.local/share/transcripts/transcripts.sqlite"
+downloads = "~/.local/share/transcripts/downloads"
+
+[ai]
+default_provider = "openai"
+default_model_alias = "latest"
+consensus_providers = ["openai", "anthropic"]
+temperature = 0
+require_structured_output = true
+require_citations = true
+
+[alpaca]
+feed = "iex"
+adjustment = "all"
+cache_seconds = 60
+request_timeout_ms = 15000
+max_retries = 3
+use_market_calendar = true
+
+[technical]
+bar_timeframes = ["1Day", "1Hour", "15Min"]
+lookback_days = 365
+moving_averages = [20, 50, 200]
+ema_periods = [9, 21]
+rsi_period = 14
+macd_fast = 12
+macd_slow = 26
+macd_signal = 9
+bollinger_period = 20
+bollinger_stddev = 2
+atr_period = 14
+relative_volume_period = 20
+
+[screen]
+price_min = 0.50
+price_max = 10
+market_cap_min = 25_000_000
+market_cap_max = 5_000_000_000
+avg_volume_min = 250_000
+avg_dollar_volume_min = 500_000
+exclude_otc = true
+exclude_bankrupt = true
+exclude_going_concern = false
+
+[risk]
+max_bid_ask_spread_percent = 5
+max_share_growth_percent = 30
+reverse_split_lookback_days = 365
+minimum_runway_months = 6
+
+[analysis]
+horizon_quarters = 2
+minimum_independent_sources = 2
+minimum_evidence_items = 3
+include_contradictions = true
+include_cross_company_confirmation = true
+
+# --- Research profiles (PRD §17) ------------------------------------------
+# Conservative:
+#   price_min=2 price_max=25 market_cap_min=500_000_000
+#   avg_dollar_volume_min=10_000_000 runway_months_min=18
+#   exclude_otc=true exclude_going_concern=true exclude_active_atm=true
+#
+# Small-cap growth:
+#   price_min=1 price_max=10 market_cap_min=100_000_000 market_cap_max=5_000_000_000
+#   avg_dollar_volume_min=2_000_000 runway_months_min=12
+#   exclude_otc=true exclude_bankrupt=true
+#
+# High-risk moonshot (requires an explicit --high-risk flag; shows prominent warnings):
+#   price_min=0.25 price_max=5 market_cap_min=20_000_000 market_cap_max=1_000_000_000
+#   avg_dollar_volume_min=500_000 runway_months_min=6
+#   exclude_otc=true exclude_bankrupt=true allow_active_atm=true

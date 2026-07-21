@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Local data & downloads
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+/data/
+/downloads/
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+config.local.toml
+
+# Build output
+dist/
+build/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/

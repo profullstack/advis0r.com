@@ -1,0 +1,122 @@
+# advis0r.com — Executive Transcript Stock Discovery CLI
+
+> **Research aid, not financial advice.** This tool converts public executive
+> communications into a reproducible, evidence-backed stock *research* workflow.
+> It never guarantees a stock will rise, executes trades, or uses non-public
+> information. Small-cap and low-priced stocks are especially risky. See
+> [Compliance](#compliance).
+
+A [Bun](https://bun.sh) + TypeScript CLI that discovers, downloads, normalizes,
+indexes, and analyzes public communications from leaders of publicly traded
+technology companies — earnings calls, investor days, keynotes, fireside chats,
+interviews, podcasts, SEC exhibits, blog posts, and captioned video — then
+combines transcript-derived signals with **Alpaca** market data and **SEC**
+fundamentals to produce a ranked, cited research watchlist for a one- to
+two-quarter horizon.
+
+CLI binary: **`transcripts`**.
+
+## Status
+
+This repository is an MVP scaffold implementing the architecture in
+[`docs/PRD.md`](docs/PRD.md). What is **fully implemented**:
+
+- Bun CLI with the full command surface (`init`, `search`, `discover`,
+  `analyze-company`, `compare`, `screen`, `models`, `providers`, `stats`,
+  `export`, `backtest`).
+- libSQL / Turso storage with the full schema + **FTS5** (works locally as an
+  embedded file or against a remote Turso DB).
+- **Alpaca Market Data** client (snapshots, trades, quotes, bars, assets,
+  calendar) with provenance tagging (feed, delayed flag, request id).
+- **Local, deterministic technical-indicator engine** (SMA/EMA/RSI/MACD/
+  Bollinger/ATR/momentum/relative-volume/trend) — the LLM never computes these.
+- Deterministic **filter engine** (price, market cap, liquidity, exchange,
+  technical, risk) and **scoring engine** (versioned weights, overall +
+  confidence, risk penalties).
+- **SEC EDGAR** fundamentals/filings provider (ticker→CIK, company facts,
+  point-in-time filings).
+- **OpenAI** and **Anthropic** analysis providers behind a provider-neutral
+  interface, with **dynamic model listing**, alias resolution
+  (`fast`/`balanced`/`deep`/`latest`), **no silent fallback**, validated
+  structured output (Zod), grounding rules, and consensus mode.
+- Ranked watchlist rendering in **terminal / Markdown / JSON** with the
+  mandatory disclaimer.
+
+What is **scaffolded for Phase 1/2** (interfaces + pipeline wired, crawler
+bodies are TODO): transcript ingestion crawlers (SEC exhibits, generic
+HTML/PDF, YouTube captions) and the walk-forward backtesting engine.
+
+## Quick start
+
+```bash
+bun install
+cp .env.example .env   # fill in keys (see below)
+
+bun run cli init                    # create schema (FTS5)
+bun run cli providers               # list configured providers
+bun run cli models list --provider openai
+bun run cli screen --tickers NVDA,AMD --price-max 2000
+
+# Discover from an explicit candidate set (transcript crawlers land in Phase 1):
+bun run cli discover "AI infrastructure" \
+  --tickers SOUN,BBAI,AITX \
+  --price-max 10 --market-cap-min 25m --horizon-quarters 2 \
+  --provider openai --model latest
+```
+
+Install globally as `transcripts`:
+
+```bash
+bun link      # then: transcripts discover "robotics" --price-max 5
+```
+
+## Configuration
+
+Config file (TOML) at `~/.config/transcripts/config.toml` (override with
+`$TRANSCRIPTS_CONFIG`). See [`config.example.toml`](config.example.toml) for
+all options and profiles. **Secrets are never stored in TOML** — they come from
+environment variables (see `.env.example`):
+
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI analysis provider |
+| `ANTHROPIC_API_KEY` | Anthropic analysis provider |
+| `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | Alpaca Market Data |
+| `DATABASE_URL` | `file:./data/transcripts.sqlite` or `libsql://…` (Turso) |
+| `DATABASE_AUTH_TOKEN` | Turso auth token (remote only) |
+| `SEC_USER_AGENT` | Required descriptive UA for SEC EDGAR |
+
+## Architecture
+
+```
+CLI → Query Planner → Transcript/SEC/Media providers → Downloader/Extractor
+  → Normalizer → SQLite+FTS5 → Entity Resolver → Alpaca/SEC data
+  → Deterministic Filter Engine → Evidence Builder → OpenAI/Anthropic
+  → Consensus & Scoring → Risk/Contradiction checks → Ranked Watchlist
+```
+
+Grounding contract (PRD §8.4): prices, financials, dates, quotes, market cap,
+volume, and estimates come **only** from deterministic providers. The model
+interprets that evidence and must cite stored evidence IDs; it may never invent
+facts. Source text is treated as untrusted input (prompt-injection defense).
+
+## Development
+
+```bash
+bun test          # deterministic unit tests (indicators, parsing)
+bun run typecheck # tsc --noEmit
+```
+
+## Compliance
+
+Every ranking includes:
+
+> This output is generated from public information and automated analysis. It
+> is a research aid, not a guarantee, personalized recommendation, or substitute
+> for professional financial advice. Small-cap and low-priced stocks may be
+> highly volatile, illiquid, subject to dilution, manipulation, delisting, and
+> total loss.
+
+## License
+
+[MIT](LICENSE) © Profullstack, Inc.
