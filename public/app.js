@@ -197,61 +197,81 @@ function rsiSeries(vals, period = 14) {
   }
   return out;
 }
-const NS = "http://www.w3.org/2000/svg";
-
-function priceChart(bars) {
-  const N = Math.min(bars.length, 180);
-  const b = bars.slice(-N);
-  if (b.length < 2) return `<div class="empty">No price history available.</div>`;
-  const closes = b.map((x) => x.c);
-  const vols = b.map((x) => x.v || 0);
-  const s20 = sma(closes, 20), s50 = sma(closes, 50);
-  const W = 720, H = 250, PH = 190, VH = 44, VY = H - VH;
-  const lo = Math.min(...closes), hi = Math.max(...closes);
-  const pad = (hi - lo) * 0.08 || 1;
-  const yMin = lo - pad, yMax = hi + pad;
-  const x = (i) => (i / (b.length - 1)) * (W - 12) + 6;
-  const y = (v) => 8 + (1 - (v - yMin) / (yMax - yMin)) * (PH - 8);
-  const line = (arr) => arr.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(" ");
-  const areaPts = closes.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  const vMax = Math.max(...vols, 1);
-  const vbars = vols.map((v, i) => {
-    const bw = Math.max(1, (W - 12) / b.length - 1);
-    const h = (v / vMax) * VH;
-    const up = i === 0 || closes[i] >= closes[i - 1];
-    return `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${(VY + (VH - h)).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${up ? "rgba(53,208,127,.5)" : "rgba(255,107,107,.5)"}"/>`;
-  }).join("");
-  const gy = [yMax, (yMax + yMin) / 2, yMin].map(
-    (v) => `<line x1="0" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="#1e2838" stroke-width="1"/><text x="4" y="${(y(v) - 3).toFixed(1)}" fill="#8a97a8" font-size="10" font-family="monospace">$${v.toFixed(2)}</text>`,
-  ).join("");
-  const dates = [0, Math.floor(b.length / 2), b.length - 1].map(
-    (i) => `<text x="${x(i).toFixed(1)}" y="${H - 4}" fill="#8a97a8" font-size="10" font-family="monospace" text-anchor="${i === 0 ? "start" : i === b.length - 1 ? "end" : "middle"}">${b[i].t}</text>`,
-  ).join("");
-  return `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="price chart">
-      <defs><linearGradient id="pa" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#38e0b0" stop-opacity=".35"/><stop offset="1" stop-color="#38e0b0" stop-opacity="0"/>
-      </linearGradient></defs>
-      ${gy}
-      <polygon points="${areaPts} ${x(b.length - 1).toFixed(1)},${PH} ${x(0).toFixed(1)},${PH}" fill="url(#pa)"/>
-      <polyline points="${line(closes)}" fill="none" stroke="#38e0b0" stroke-width="2"/>
-      <polyline points="${line(s20)}" fill="none" stroke="#4c8dff" stroke-width="1.4" stroke-opacity=".9"/>
-      <polyline points="${line(s50)}" fill="none" stroke="#ffb454" stroke-width="1.4" stroke-opacity=".9"/>
-      ${vbars}${dates}
-    </svg>
-    <div class="legend"><span><i style="background:#38e0b0"></i>Close</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(53,208,127,.5)"></i>Volume</span></div>`;
+/* Professional candlestick + volume + SMA charts via TradingView
+   lightweight-charts (same library b1dz uses). */
+const LWC = window.LightweightCharts;
+let liveCharts = [];
+function destroyCharts() {
+  for (const c of liveCharts) { try { c.remove(); } catch {} }
+  liveCharts = [];
+}
+const chartColors = {
+  text: "#8a97a8", grid: "rgba(63,63,70,0.28)", border: "rgba(82,82,91,0.55)",
+};
+function baseChart(el, height) {
+  const chart = LWC.createChart(el, {
+    height,
+    width: el.clientWidth || 700,
+    layout: { background: { type: LWC.ColorType.Solid, color: "transparent" }, textColor: chartColors.text, fontFamily: "ui-monospace, monospace" },
+    grid: { vertLines: { color: chartColors.grid }, horzLines: { color: chartColors.grid } },
+    rightPriceScale: { borderColor: chartColors.border },
+    timeScale: { borderColor: chartColors.border, timeVisible: false, secondsVisible: false },
+    crosshair: { mode: LWC.CrosshairMode ? LWC.CrosshairMode.Normal : 0 },
+    handleScale: true, handleScroll: true,
+  });
+  liveCharts.push(chart);
+  const ro = new ResizeObserver(() => { try { chart.applyOptions({ width: el.clientWidth }); } catch {} });
+  ro.observe(el);
+  return chart;
 }
 
-function rsiChart(bars) {
-  const N = Math.min(bars.length, 180);
-  const closes = bars.slice(-N).map((x) => x.c);
+function mountPriceChart(bars) {
+  const el = document.getElementById("lwc-price");
+  if (!el || !LWC) return;
+  if (bars.length < 2) { el.outerHTML = `<div class="chart-empty">No price history available.</div>`; return; }
+  const candles = bars.map((b) => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c }));
+  const closes = bars.map((b) => b.c);
+  const s20 = sma(closes, 20), s50 = sma(closes, 50);
+  const chart = baseChart(el, 320);
+
+  const candleSeries = chart.addSeries(LWC.CandlestickSeries, {
+    upColor: "#22c55e", downColor: "#ef4444", borderVisible: false,
+    wickUpColor: "#86efac", wickDownColor: "#fca5a5",
+  });
+  candleSeries.setData(candles);
+
+  const volSeries = chart.addSeries(LWC.HistogramSeries, { priceScaleId: "", priceFormat: { type: "volume" } });
+  volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  volSeries.setData(bars.map((b) => ({ time: b.t, value: b.v || 0, color: b.c >= b.o ? "rgba(34,197,94,0.45)" : "rgba(248,113,113,0.45)" })));
+
+  const smaLine = (arr, color) => {
+    const series = chart.addSeries(LWC.LineSeries, { color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    series.setData(bars.map((b, i) => (arr[i] == null ? null : { time: b.t, value: arr[i] })).filter(Boolean));
+  };
+  smaLine(s20, "#4c8dff");
+  smaLine(s50, "#ffb454");
+
+  chart.timeScale().fitContent();
+}
+
+function mountRsiChart(bars) {
+  const el = document.getElementById("lwc-rsi");
+  if (!el || !LWC || bars.length < 15) { if (el) el.outerHTML = ""; return; }
+  const closes = bars.map((b) => b.c);
   const r = rsiSeries(closes);
-  const W = 720, H = 70;
-  const x = (i) => (i / (closes.length - 1)) * (W - 12) + 6;
-  const y = (v) => 6 + (1 - v / 100) * (H - 12);
-  const pts = r.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(" ");
-  const g = (lvl) => `<line x1="0" x2="${W}" y1="${y(lvl)}" y2="${y(lvl)}" stroke="#1e2838" stroke-dasharray="4 4"/><text x="4" y="${(y(lvl) - 2).toFixed(1)}" fill="#8a97a8" font-size="9" font-family="monospace">${lvl}</text>`;
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="RSI">${g(70)}${g(30)}<polyline points="${pts}" fill="none" stroke="#c48dff" stroke-width="1.6"/></svg><div class="legend"><span><i style="background:#c48dff"></i>RSI(14)</span></div>`;
+  const chart = baseChart(el, 130);
+  chart.applyOptions({ rightPriceScale: { borderColor: chartColors.border, autoScale: false, scaleMargins: { top: 0.1, bottom: 0.1 } } });
+  const line = chart.addSeries(LWC.LineSeries, { color: "#c48dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
+  line.setData(bars.map((b, i) => (r[i] == null ? null : { time: b.t, value: r[i] })).filter(Boolean));
+  line.createPriceLine({ price: 70, color: "rgba(248,113,113,.5)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "70" });
+  line.createPriceLine({ price: 30, color: "rgba(34,197,94,.5)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "30" });
+  chart.timeScale().fitContent();
+}
+
+function mountCharts(bars) {
+  destroyCharts();
+  // Defer to next frame so the modal has laid out and containers have width.
+  requestAnimationFrame(() => { mountPriceChart(bars); mountRsiChart(bars); });
 }
 
 const fmtNum = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d }));
@@ -282,8 +302,14 @@ function renderDetail(d) {
       </div>
     </div>
 
-    <div class="chartbox">${priceChart(d.bars || [])}</div>
-    <div class="chartbox">${rsiChart(d.bars || [])}</div>
+    <div class="chartbox">
+      <div id="lwc-price" class="lwchart"></div>
+      <div class="legend"><span><i style="background:#22c55e"></i>Candles</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(120,120,140,.5)"></i>Volume</span></div>
+    </div>
+    <div class="chartbox">
+      <div id="lwc-rsi" class="lwchart rsi"></div>
+      <div class="legend"><span><i style="background:#c48dff"></i>RSI(14)</span><span>oversold 30 · overbought 70</span></div>
+    </div>
 
     <div class="dl-section"><h3>Technical</h3>
       <div class="grid2">
@@ -325,6 +351,8 @@ function renderDetail(d) {
 
     <p class="src-note">Price data: ${esc(d.marketSource)} (${d.delayed ? "end-of-day, delayed" : "real-time"}). Fundamentals: SEC EDGAR. Indicators computed locally. ${d.marketError ? "Market data note: " + esc(d.marketError) : ""}</p>
     <div class="disclaimer">${esc(d.disclaimer || "")}</div>`;
+
+  mountCharts(d.bars || []);
 }
 
 async function openTicker(sym) {
@@ -341,6 +369,7 @@ async function openTicker(sym) {
   }
 }
 function closeDetail() {
+  destroyCharts();
   $("#detail").classList.add("hidden");
   document.body.style.overflow = "";
 }

@@ -166,6 +166,9 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .close-x { position: sticky; top: 0; float: right; background: var(--panel); border: 1px solid var(--line); color: var(--text); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 18px; }
 .chartbox { margin: 18px 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
 .chartbox svg { display: block; width: 100%; height: auto; }
+.lwchart { width: 100%; height: 320px; }
+.lwchart.rsi { height: 130px; }
+.chart-empty { color: var(--dim); text-align: center; padding: 40px; font-size: 13px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--dim); padding: 4px 6px 0; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 14px 0; }
