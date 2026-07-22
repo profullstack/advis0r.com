@@ -1,5 +1,10 @@
 /**
  * OpenAI analysis provider (PRD §8, §28 Phase 1).
+ *
+ * Uses function-calling structured output so the model must return a complete,
+ * schema-valid StockAnalysis (mirrors the Anthropic tool-use path). Non-chat
+ * models (realtime/audio/image/embedding/…) are filtered out of model listing
+ * so aliases like `latest`/`deep` resolve to a real chat model.
  */
 import type { AppConfig } from "../config.ts";
 import type {
@@ -7,6 +12,7 @@ import type {
   AnalysisResult,
   CostEstimate,
   ModelDescriptor,
+  StockAnalysis,
 } from "../types.ts";
 import type { AnalysisProvider } from "./interfaces.ts";
 import {
@@ -15,21 +21,21 @@ import {
   inputHash,
   promptHash,
 } from "../analysis/prompt.ts";
-import { analyzeWithRepair } from "../analysis/validate.ts";
+import { StockAnalysisSchema, stockAnalysisJsonSchema } from "../analysis/schema.ts";
 import { resolveModel } from "../analysis/aliases.ts";
 import { estimateTokens } from "../analysis/cost.ts";
 
 const BASE = "https://api.openai.com/v1";
+// Models that can't do chat/function-calling for this task.
+const NON_CHAT = /realtime|audio|transcribe|tts|image|dall-e|sora|whisper|embedding|moderation|search|computer-use|codex|instruct/i;
 
 export class OpenAIProvider implements AnalysisProvider {
   readonly id = "openai";
   private readonly key: string;
-  private readonly temperature: number;
   private modelCache: ModelDescriptor[] | null = null;
 
   constructor(config: AppConfig) {
     this.key = config.secrets.openaiApiKey;
-    this.temperature = config.ai.temperature;
   }
 
   private headers(): Record<string, string> {
@@ -46,7 +52,7 @@ export class OpenAIProvider implements AnalysisProvider {
     if (!res.ok) throw new Error(`OpenAI models ${res.status}: ${await res.text()}`);
     const body = (await res.json()) as { data: any[] };
     this.modelCache = body.data
-      .filter((m) => /^(gpt|o[0-9]|chatgpt)/.test(m.id))
+      .filter((m) => /^(gpt-|o[0-9]|chatgpt)/.test(m.id) && !NON_CHAT.test(m.id))
       .map((m) => ({
         id: m.id,
         provider: this.id,
@@ -58,36 +64,43 @@ export class OpenAIProvider implements AnalysisProvider {
   private async resolve(model: string): Promise<string> {
     const models = await this.listModels();
     return resolveModel(model, models, {
-      deep: /^(o[0-9]|gpt-[0-9]+(\.[0-9]+)?$)/,
-      fast: /mini|nano|turbo/,
-      balanced: /gpt-[0-9]/,
+      deep: /^o[0-9]|^gpt-[0-9]+(\.[0-9]+)?$/,
+      fast: /mini|nano/,
+      balanced: /^gpt-[0-9]/,
     });
   }
 
   async analyze(request: AnalysisRequest): Promise<AnalysisResult> {
     const model = await this.resolve(request.model);
     const user = buildUserPrompt(request);
-    const call = async (repairHint?: string): Promise<string> => {
-      const messages: any[] = [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: user },
-      ];
-      if (repairHint) messages.push({ role: "user", content: repairHint });
-      const res = await fetch(`${BASE}/chat/completions`, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({
-          model,
-          temperature: this.temperature,
-          response_format: { type: "json_object" },
-          messages,
-        }),
-      });
-      if (!res.ok) throw new Error(`OpenAI analyze ${res.status}: ${await res.text()}`);
-      const body = (await res.json()) as any;
-      return body.choices?.[0]?.message?.content ?? "{}";
-    };
-    const analysis = await analyzeWithRepair(call);
+    const res = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      headers: this.headers(),
+      // `temperature` is omitted — newer OpenAI models only accept the default.
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: user },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "emit_stock_analysis",
+              description: "Emit the grounded StockAnalysis for the ticker. Every field is required.",
+              parameters: stockAnalysisJsonSchema,
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "emit_stock_analysis" } },
+      }),
+    });
+    if (!res.ok) throw new Error(`OpenAI analyze ${res.status}: ${await res.text()}`);
+    const body = (await res.json()) as any;
+    const args = body.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) throw new Error("OpenAI returned no tool call");
+    const analysis = StockAnalysisSchema.parse(JSON.parse(args)) as StockAnalysis;
     return {
       provider: this.id,
       model,

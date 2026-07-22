@@ -339,36 +339,52 @@ const server = Bun.serve({
       }
 
       // On-demand LLM sharpening for one ticker (persisted → cached thereafter).
+      // Tries the requested (or default) provider first, then falls back to the
+      // others — so OpenAI is used the moment its quota resets, and Anthropic
+      // covers it in the meantime.
       if (p === "/api/analyze") {
         const symbol = url.searchParams.get("symbol");
         if (!symbol) return json({ error: "missing ?symbol=" }, 400);
-        const provider = url.searchParams.get("provider") ?? config.ai.defaultProvider;
-        if (provider === "offline") return json({ error: "use /api/ticker for offline" }, 400);
+        const requested = url.searchParams.get("provider");
+        const all = [...registry.ai.keys()].filter((k) => k !== "offline");
+        const order =
+          requested && requested !== "offline"
+            ? [requested, ...all.filter((x) => x !== requested)]
+            : [config.ai.defaultProvider, ...all.filter((x) => x !== config.ai.defaultProvider)];
         const model = url.searchParams.get("model") ?? "latest";
-        try {
-          const outcome = await analyzeTicker(db, config, registry, symbol.toUpperCase(), {
-            topic: url.searchParams.get("topic") ?? symbol.toUpperCase(),
-            asOf: new Date().toISOString(),
-            horizonQuarters: 2,
-            provider,
-            model,
-            criteria: {},
-            persist: true,
-          });
-          if (!outcome.candidate) return json({ error: outcome.filterReasons.join("; ") || "no analysis" }, 502);
-          const c = outcome.candidate;
-          return json({
-            provider: c.provider,
-            model: c.model,
-            overallScore: c.overallScore,
-            confidence: c.confidence,
-            analysis: c.analysis,
-            analyzedAt: c.analyzedAt,
-            disclaimer: DISCLAIMER,
-          });
-        } catch (err) {
-          return json({ error: String(err) }, 502);
+        let lastErr = "no analysis produced";
+        for (const prov of order) {
+          if (!registry.ai.has(prov)) continue;
+          try {
+            const outcome = await analyzeTicker(db, config, registry, symbol.toUpperCase(), {
+              topic: url.searchParams.get("topic") ?? symbol.toUpperCase(),
+              asOf: new Date().toISOString(),
+              horizonQuarters: 2,
+              provider: prov,
+              model,
+              criteria: {},
+              persist: true,
+            });
+            if (outcome.candidate) {
+              const c = outcome.candidate;
+              return json({
+                provider: c.provider,
+                model: c.model,
+                overallScore: c.overallScore,
+                confidence: c.confidence,
+                analysis: c.analysis,
+                analyzedAt: c.analyzedAt,
+                triedFallback: prov !== order[0],
+                disclaimer: DISCLAIMER,
+              });
+            }
+            lastErr = outcome.filterReasons.join("; ") || lastErr;
+          } catch (err) {
+            lastErr = String(err);
+            // fall through to the next provider
+          }
         }
+        return json({ error: lastErr }, 502);
       }
 
       if (p === "/api/signals") {

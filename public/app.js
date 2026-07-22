@@ -514,9 +514,9 @@ function analysisBlock(d) {
   const head = ai
     ? `<span class="badge audio">✨ AI · ${esc(ai.provider)}:${esc(ai.model)}</span>`
     : `<span class="badge conservative">offline · deterministic</span>`;
-  const prov = providers.includes("anthropic") ? "anthropic" : providers[0];
+  // No fixed provider: the server tries OpenAI first, falls back to Anthropic.
   const btn = providers.length
-    ? `<button class="sharpen-btn" data-sharpen="${esc(d.ticker)}" data-provider="${esc(prov)}">${ai ? "↻ Re-run AI" : "✨ Sharpen with AI"}</button>`
+    ? `<button class="sharpen-btn" data-sharpen="${esc(d.ticker)}">${ai ? "↻ Re-run AI" : "✨ Sharpen with AI"}</button>`
     : "";
   const chips = (arr, cls, mark) => (arr && arr.length ? `<div class="chips">${arr.slice(0, 6).map((x) => `<span class="chip ${cls}">${mark} ${esc(x)}</span>`).join("")}</div>` : "");
   const scen = (src.bullCase || src.bearCase)
@@ -533,15 +533,15 @@ function analysisBlock(d) {
   </div>`;
 }
 
-async function sharpen(ticker, provider) {
+async function sharpen(ticker) {
   const sec = document.getElementById("ai-analysis-section");
-  if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><div class="spinner"></div><p class="empty">Running ${esc(provider)} analysis for ${esc(ticker)}… (~20s)</p>`;
+  if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><div class="spinner"></div><p class="empty">Running AI analysis for ${esc(ticker)}… (~20s)</p>`;
   try {
-    const r = await api(`/api/analyze?symbol=${encodeURIComponent(ticker)}&provider=${encodeURIComponent(provider)}&model=latest`);
-    const dd = { ticker, aiProviders: [provider], aiAnalysis: { provider: r.provider, model: r.model, overallScore: r.overallScore, confidence: r.confidence, analysis: r.analysis } };
+    const r = await api(`/api/analyze?symbol=${encodeURIComponent(ticker)}&model=latest`);
+    const dd = { ticker, aiProviders: ["ai"], aiAnalysis: { provider: r.provider, model: r.model, overallScore: r.overallScore, confidence: r.confidence, analysis: r.analysis } };
     if (sec) sec.outerHTML = analysisBlock(dd);
   } catch (e) {
-    if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><p class="empty">Sharpen failed: ${esc(e.message)}</p><button class="sharpen-btn" data-sharpen="${esc(ticker)}" data-provider="${esc(provider)}">Retry</button>`;
+    if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><p class="empty">Sharpen failed: ${esc(e.message)}</p><button class="sharpen-btn" data-sharpen="${esc(ticker)}">Retry</button>`;
   }
 }
 
@@ -675,7 +675,7 @@ function closeDetail() {
 }
 document.addEventListener("click", (e) => {
   const sh = e.target.closest(".sharpen-btn");
-  if (sh && sh.dataset.sharpen) { e.preventDefault(); sharpen(sh.dataset.sharpen, sh.dataset.provider); return; }
+  if (sh && sh.dataset.sharpen) { e.preventDefault(); sharpen(sh.dataset.sharpen); return; }
   const link = e.target.closest(".tlink");
   if (link && link.dataset.ticker) { e.preventDefault(); openTicker(link.dataset.ticker); return; }
   if (e.target.closest("[data-close]")) closeDetail();
