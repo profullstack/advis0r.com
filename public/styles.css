@@ -166,7 +166,8 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .close-x { position: sticky; top: 0; float: right; background: var(--panel); border: 1px solid var(--line); color: var(--text); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 18px; }
 .chartbox { margin: 18px 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
 .chartbox svg { display: block; width: 100%; height: auto; }
-.lwchart { width: 100%; height: 320px; }
+.lwchart { width: 100%; height: 320px; position: relative; }
+.vp-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
 .lwchart.rsi { height: 130px; }
 .lwchart.macd { height: 150px; }
 .chart-empty { color: var(--dim); text-align: center; padding: 40px; font-size: 13px; }

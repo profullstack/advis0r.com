@@ -227,6 +227,64 @@ function macdSeries(vals, fast = 12, slow = 26, signal = 9) {
   const hist = vals.map((_, i) => (macd[i] == null || sig[i] == null ? null : macd[i] - sig[i]));
   return { macd, signal: sig, hist };
 }
+
+/* Volume profile: volume traded by price bucket, distributed across each bar's
+   high-low range. Returns bins + POC (point of control) + value area (70%). */
+function volumeProfile(bars, buckets = 24) {
+  const lo = Math.min(...bars.map((b) => b.l));
+  const hi = Math.max(...bars.map((b) => b.h));
+  if (!(hi > lo)) return { bins: [], poc: null, vaHigh: null, vaLow: null, maxVol: 0 };
+  const step = (hi - lo) / buckets;
+  const bins = Array.from({ length: buckets }, (_, i) => ({ low: lo + i * step, high: lo + (i + 1) * step, mid: lo + (i + 0.5) * step, volume: 0 }));
+  for (const b of bars) {
+    const spanLo = Math.max(lo, b.l), spanHi = Math.min(hi, b.h);
+    const first = Math.max(0, Math.min(buckets - 1, Math.floor((spanLo - lo) / step)));
+    const last = Math.max(0, Math.min(buckets - 1, Math.floor((spanHi - lo) / step)));
+    const n = last - first + 1;
+    const per = (b.v || 0) / n;
+    for (let i = first; i <= last; i++) bins[i].volume += per;
+  }
+  let pocIdx = 0;
+  bins.forEach((bn, i) => { if (bn.volume > bins[pocIdx].volume) pocIdx = i; });
+  const total = bins.reduce((a, b) => a + b.volume, 0);
+  // Value area = 70% of volume expanding out from POC.
+  const order = [pocIdx];
+  let acc = bins[pocIdx].volume, loI = pocIdx, hiI = pocIdx;
+  while (acc < total * 0.7 && (loI > 0 || hiI < buckets - 1)) {
+    const below = loI > 0 ? bins[loI - 1].volume : -1;
+    const above = hiI < buckets - 1 ? bins[hiI + 1].volume : -1;
+    if (above >= below) { hiI++; acc += bins[hiI].volume; order.push(hiI); }
+    else { loI--; acc += bins[loI].volume; order.push(loI); }
+  }
+  return { bins, poc: bins[pocIdx].mid, vaHigh: bins[hiI].high, vaLow: bins[loI].low, maxVol: bins[pocIdx].volume };
+}
+
+/* Support/resistance from swing pivots, clustered into price zones and ranked
+   by touch count. Classified vs the last close. */
+function supportResistance(bars, w = 5, maxLevels = 6) {
+  const piv = [];
+  for (let i = w; i < bars.length - w; i++) {
+    const seg = bars.slice(i - w, i + w + 1);
+    if (bars[i].h >= Math.max(...seg.map((b) => b.h))) piv.push(bars[i].h);
+    if (bars[i].l <= Math.min(...seg.map((b) => b.l))) piv.push(bars[i].l);
+  }
+  if (!piv.length) return [];
+  const last = bars[bars.length - 1].c;
+  const tol = last * 0.02; // cluster within 2%
+  piv.sort((a, b) => a - b);
+  const clusters = [];
+  for (const p of piv) {
+    const c = clusters[clusters.length - 1];
+    if (c && p - c.sum / c.count <= tol) { c.sum += p; c.count++; }
+    else clusters.push({ sum: p, count: 1 });
+  }
+  return clusters
+    .map((c) => ({ price: c.sum / c.count, touches: c.count }))
+    .filter((l) => l.touches >= 2 && Math.abs(l.price - last) / last > 0.01)
+    .sort((a, b) => b.touches - a.touches)
+    .slice(0, maxLevels)
+    .map((l) => ({ ...l, type: l.price >= last ? "R" : "S" }));
+}
 /* Professional candlestick + volume + SMA charts via TradingView
    lightweight-charts (same library b1dz uses). */
 const LWC = window.LightweightCharts;
@@ -287,7 +345,56 @@ function mountPriceChart(bars) {
   overlay(s20, { color: "#4c8dff" });
   overlay(s50, { color: "#ffb454" });
 
+  // Support / resistance levels as horizontal price lines.
+  for (const lvl of supportResistance(bars)) {
+    candleSeries.createPriceLine({
+      price: lvl.price,
+      color: lvl.type === "R" ? "rgba(248,113,113,0.55)" : "rgba(34,197,94,0.55)",
+      lineWidth: 1,
+      lineStyle: 0,
+      axisLabelVisible: true,
+      title: `${lvl.type}·${lvl.touches}`,
+    });
+  }
+
   chart.timeScale().fitContent();
+
+  // Volume profile: horizontal volume-by-price bars on an overlay canvas,
+  // aligned to the price axis via priceToCoordinate. POC line drawn too.
+  const vp = volumeProfile(bars, 26);
+  if (vp.bins.length) {
+    if (vp.poc != null) {
+      candleSeries.createPriceLine({ price: vp.poc, color: "rgba(255,180,84,0.8)", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "POC" });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.className = "vp-overlay";
+    el.appendChild(canvas);
+    const drawVP = () => {
+      const w = el.clientWidth, h = el.clientHeight;
+      if (!w || !h) return;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      canvas.style.width = w + "px"; canvas.style.height = h + "px";
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const maxBar = w * 0.28; // profile occupies left ~28%
+      for (const bin of vp.bins) {
+        const yTop = candleSeries.priceToCoordinate(bin.high);
+        const yBot = candleSeries.priceToCoordinate(bin.low);
+        if (yTop == null || yBot == null) continue;
+        const bh = Math.max(1, Math.abs(yBot - yTop) - 1);
+        const bw = (bin.volume / vp.maxVol) * maxBar;
+        const inVA = bin.mid <= vp.vaHigh && bin.mid >= vp.vaLow;
+        const isPoc = Math.abs(bin.mid - vp.poc) < (bin.high - bin.low);
+        ctx.fillStyle = isPoc ? "rgba(255,180,84,0.55)" : inVA ? "rgba(76,141,255,0.34)" : "rgba(120,130,160,0.22)";
+        ctx.fillRect(0, Math.min(yTop, yBot), bw, bh);
+      }
+    };
+    requestAnimationFrame(drawVP);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(drawVP);
+    new ResizeObserver(drawVP).observe(el);
+  }
 }
 
 function mountMacdChart(bars) {
@@ -360,7 +467,7 @@ function renderDetail(d) {
 
     <div class="chartbox">
       <div id="lwc-price" class="lwchart"></div>
-      <div class="legend"><span><i style="background:#22c55e"></i>Candles</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(150,160,190,.8)"></i>Bollinger 20/2</span><span><i style="background:rgba(120,120,140,.5)"></i>Volume</span></div>
+      <div class="legend"><span><i style="background:#22c55e"></i>Candles</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(150,160,190,.8)"></i>Bollinger 20/2</span><span><i style="background:rgba(76,141,255,.34)"></i>Vol profile</span><span><i style="background:rgba(255,180,84,.8)"></i>POC</span><span><i style="background:rgba(34,197,94,.55)"></i>Support</span><span><i style="background:rgba(248,113,113,.55)"></i>Resistance</span></div>
     </div>
     <div class="chartbox">
       <div id="lwc-rsi" class="lwchart rsi"></div>
