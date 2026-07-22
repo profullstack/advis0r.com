@@ -197,12 +197,25 @@ async function serveStatic(pathname: string): Promise<Response> {
   return json({ error: "not found" }, 404);
 }
 
+/**
+ * Turn a raw user query into a safe FTS5 MATCH expression. Each alphanumeric
+ * token is quoted (so hyphens, operators, quotes, colons etc. can't break the
+ * parser) and prefix-matched for typeahead-style results. Returns null if the
+ * query has no usable tokens.
+ */
+function ftsQuery(raw: string): string | null {
+  const tokens = (raw.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length >= 2 || /\d/.test(t));
+  if (!tokens.length) return null;
+  return tokens.map((t) => `"${t}"*`).join(" ");
+}
+
 async function candidateTickers(topic: string | null, limit: number): Promise<string[]> {
   try {
-    if (topic) {
+    const match = topic ? ftsQuery(topic) : null;
+    if (match) {
       const rs = await db.execute({
         sql: `SELECT DISTINCT ticker FROM segments_fts WHERE segments_fts MATCH ? LIMIT ?`,
-        args: [topic, limit],
+        args: [match, limit],
       });
       const t = rs.rows.map((r) => String(r.ticker)).filter(Boolean);
       if (t.length) return t;
@@ -223,6 +236,14 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const p = url.pathname;
+
+    // Canonicalize: strip a leading "www." from the host on every request.
+    const host = req.headers.get("host") ?? "";
+    if (host.toLowerCase().startsWith("www.")) {
+      const proto = req.headers.get("x-forwarded-proto") ?? "https";
+      return Response.redirect(`${proto}://${host.slice(4)}${p}${url.search}`, 301);
+    }
+
     try {
       if (p === "/health") return json({ ok: true });
 
@@ -263,12 +284,28 @@ const server = Bun.serve({
         const q = url.searchParams.get("q");
         if (!q) return json({ error: "missing ?q=" }, 400);
         const limit = Math.min(50, Number(url.searchParams.get("limit") ?? 20) || 20);
-        const rs = await db.execute({
-          sql: `SELECT text, speaker, ticker, event_date FROM segments_fts
-                WHERE segments_fts MATCH ? LIMIT ?`,
-          args: [q, limit],
-        });
-        return json({ query: q, results: rs.rows });
+        const match = ftsQuery(q);
+        let rows: any[] = [];
+        if (match) {
+          const rs = await db.execute({
+            sql: `SELECT text, speaker, ticker, event_date FROM segments_fts
+                  WHERE segments_fts MATCH ? LIMIT ?`,
+            args: [match, limit],
+          });
+          rows = rs.rows;
+        }
+        // Fallback: substring scan when FTS finds nothing (e.g. rare tokens).
+        if (rows.length === 0) {
+          const rs = await db.execute({
+            sql: `SELECT s.text AS text, s.speaker AS speaker, t.primary_ticker AS ticker,
+                         t.event_date AS event_date
+                  FROM transcript_segments s JOIN transcripts t ON t.id = s.transcript_id
+                  WHERE s.text LIKE ? LIMIT ?`,
+            args: [`%${q.replace(/[%_]/g, "")}%`, limit],
+          });
+          rows = rs.rows;
+        }
+        return json({ query: q, results: rows });
       }
 
       if (p === "/api/ticker") {
