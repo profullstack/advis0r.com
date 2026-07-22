@@ -315,8 +315,8 @@ function baseChart(el, height) {
 
 function mountPriceChart(bars) {
   const el = document.getElementById("lwc-price");
-  if (!el || !LWC) return;
-  if (bars.length < 2) { el.outerHTML = `<div class="chart-empty">No price history available.</div>`; return; }
+  if (!el || !LWC) return null;
+  if (bars.length < 2) { el.outerHTML = `<div class="chart-empty">No price history available.</div>`; return null; }
   const candles = bars.map((b) => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c }));
   const closes = bars.map((b) => b.c);
   const s20 = sma(closes, 20), s50 = sma(closes, 50);
@@ -395,11 +395,13 @@ function mountPriceChart(bars) {
     chart.timeScale().subscribeVisibleLogicalRangeChange(drawVP);
     new ResizeObserver(drawVP).observe(el);
   }
+
+  return { chart, series: candleSeries, valueByTime: new Map(bars.map((b) => [b.t, b.c])), fallback: bars[bars.length - 1].c };
 }
 
 function mountMacdChart(bars) {
   const el = document.getElementById("lwc-macd");
-  if (!el || !LWC || bars.length < 35) { if (el) el.outerHTML = ""; return; }
+  if (!el || !LWC || bars.length < 35) { if (el) el.outerHTML = ""; return null; }
   const closes = bars.map((b) => b.c);
   const { macd, signal, hist } = macdSeries(closes, 12, 26, 9);
   const chart = baseChart(el, 150);
@@ -415,11 +417,12 @@ function mountMacdChart(bars) {
   sigLine.setData(bars.map((b, i) => (signal[i] == null ? { time: b.t } : { time: b.t, value: signal[i] })));
 
   chart.timeScale().fitContent();
+  return { chart, series: macdLine, valueByTime: new Map(bars.map((b, i) => [b.t, macd[i]])), fallback: 0 };
 }
 
 function mountRsiChart(bars) {
   const el = document.getElementById("lwc-rsi");
-  if (!el || !LWC || bars.length < 15) { if (el) el.outerHTML = ""; return; }
+  if (!el || !LWC || bars.length < 15) { if (el) el.outerHTML = ""; return null; }
   const closes = bars.map((b) => b.c);
   const r = rsiSeries(closes);
   const chart = baseChart(el, 130);
@@ -431,6 +434,7 @@ function mountRsiChart(bars) {
   line.createPriceLine({ price: 70, color: "rgba(248,113,113,.5)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "70" });
   line.createPriceLine({ price: 30, color: "rgba(34,197,94,.5)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "30" });
   chart.timeScale().fitContent();
+  return { chart, series: line, valueByTime: new Map(bars.map((b, i) => [b.t, r[i]])), fallback: 50 };
 }
 
 /* Keep every pane's time axis locked together: zoom/pan one → all follow.
@@ -452,15 +456,44 @@ function syncTimeScales(charts) {
   }
 }
 
+function timeKey(t) {
+  return typeof t === "string" ? t : `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
+}
+
+/* Synced crosshair: hovering any pane places the crosshair at the same time on
+   every other pane (vertical line aligned; horizontal at that pane's own value).
+   Guarded so programmatic placement doesn't re-trigger the sync. */
+let chSyncing = false;
+function syncCrosshair(panes) {
+  for (const src of panes) {
+    src.chart.subscribeCrosshairMove((param) => {
+      if (chSyncing) return;
+      chSyncing = true;
+      try {
+        if (!param.point || param.time == null) {
+          for (const o of panes) if (o !== src) o.chart.clearCrosshairPosition();
+        } else {
+          const key = timeKey(param.time);
+          for (const o of panes) {
+            if (o === src) continue;
+            const v = o.valueByTime.get(key);
+            o.chart.setCrosshairPosition(v == null ? o.fallback : v, param.time, o.series);
+          }
+        }
+      } finally {
+        chSyncing = false;
+      }
+    });
+  }
+}
+
 function mountCharts(bars) {
   destroyCharts();
   // Defer to next frame so the modal has laid out and containers have width.
   requestAnimationFrame(() => {
-    mountPriceChart(bars);
-    mountRsiChart(bars);
-    mountMacdChart(bars);
-    // liveCharts now holds [price, rsi?, macd?] in creation order — sync them.
-    syncTimeScales(liveCharts);
+    const panes = [mountPriceChart(bars), mountMacdChart(bars), mountRsiChart(bars)].filter(Boolean);
+    syncTimeScales(panes.map((p) => p.chart));
+    syncCrosshair(panes);
   });
 }
 
