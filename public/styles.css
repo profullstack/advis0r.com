@@ -179,6 +179,11 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .kv .v { font-family: var(--mono); font-size: 15px; font-weight: 700; margin-top: 3px; }
 .kv .v.pos { color: var(--pos); } .kv .v.neg { color: var(--neg); }
 .dl-section h3 { margin: 22px 0 8px; font-size: 14px; letter-spacing: -.01em; color: #c9d4e2; }
+.an-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.an-spacer { flex: 1 1 auto; }
+.an-sub { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin: 12px 0 6px; }
+.sharpen-btn { cursor: pointer; border: 1px solid rgba(196,141,255,.4); background: rgba(196,141,255,.12); color: #d8b6ff; font-size: 12.5px; font-weight: 700; padding: 6px 12px; border-radius: 999px; }
+.sharpen-btn:hover { background: rgba(196,141,255,.22); }
 .src-note { color: var(--dim); font-size: 11.5px; margin-top: 4px; }
 
 /* Sources: transcripts & media */

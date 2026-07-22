@@ -58,8 +58,9 @@ export const StockAnalysisSchema = z.object({
   thesis: z.string(),
   catalystSummary: z.array(z.string()),
   riskSummary: z.array(z.string()),
-  transcriptSignals: z.array(TranscriptSignalSchema),
-  contradictions: z.array(ContradictionSchema),
+  // Data-derived; the model need not emit these (we attach signals separately).
+  transcriptSignals: z.array(TranscriptSignalSchema).default([]),
+  contradictions: z.array(ContradictionSchema).default([]),
   catalystScore: z.number().min(0).max(100),
   managementCredibilityScore: z.number().min(0).max(100),
   executionScore: z.number().min(0).max(100),
@@ -79,34 +80,57 @@ export const StockAnalysisSchema = z.object({
 
 export type StockAnalysisParsed = z.infer<typeof StockAnalysisSchema>;
 
-/** JSON Schema for providers that support native structured output. */
+/** Complete JSON Schema for provider structured output (tool use). */
+const score = { type: "number", minimum: 0, maximum: 100 } as const;
+const strArr = { type: "array", items: { type: "string" } } as const;
+const scenarioJsonSchema = {
+  type: "object",
+  properties: {
+    name: { type: "string", enum: ["bull", "base", "bear"] },
+    probability: { type: "number", minimum: 0, maximum: 1 },
+    assumptions: strArr,
+    expectedCatalysts: strArr,
+    invalidationConditions: strArr,
+    estimatedRange: {
+      type: "object",
+      properties: { low: { type: "number" }, high: { type: "number" }, methodology: { type: "string" } },
+      required: ["low", "high", "methodology"],
+    },
+  },
+  required: ["name", "probability", "assumptions", "expectedCatalysts", "invalidationConditions"],
+} as const;
+
 export const stockAnalysisJsonSchema = {
   type: "object",
-  additionalProperties: false,
+  properties: {
+    ticker: { type: "string" },
+    companyName: { type: "string" },
+    asOf: { type: "string" },
+    horizonQuarters: { type: "integer", enum: [1, 2] },
+    thesis: { type: "string" },
+    catalystSummary: strArr,
+    riskSummary: strArr,
+    catalystScore: score,
+    managementCredibilityScore: score,
+    executionScore: score,
+    financialQualityScore: score,
+    valuationScore: score,
+    marketAttentionScore: score,
+    dilutionRiskScore: score,
+    liquidityRiskScore: score,
+    overallScore: score,
+    confidence: score,
+    bullCase: scenarioJsonSchema,
+    baseCase: scenarioJsonSchema,
+    bearCase: scenarioJsonSchema,
+    evidenceIds: strArr,
+    missingData: strArr,
+  },
   required: [
-    "ticker",
-    "companyName",
-    "asOf",
-    "horizonQuarters",
-    "thesis",
-    "catalystSummary",
-    "riskSummary",
-    "transcriptSignals",
-    "contradictions",
-    "catalystScore",
-    "managementCredibilityScore",
-    "executionScore",
-    "financialQualityScore",
-    "valuationScore",
-    "marketAttentionScore",
-    "dilutionRiskScore",
-    "liquidityRiskScore",
-    "overallScore",
-    "confidence",
-    "bullCase",
-    "baseCase",
-    "bearCase",
-    "evidenceIds",
-    "missingData",
+    "ticker", "companyName", "asOf", "horizonQuarters", "thesis", "catalystSummary",
+    "riskSummary", "catalystScore", "managementCredibilityScore", "executionScore",
+    "financialQualityScore", "valuationScore", "marketAttentionScore", "dilutionRiskScore",
+    "liquidityRiskScore", "overallScore", "confidence", "bullCase", "baseCase", "bearCase",
+    "evidenceIds", "missingData",
   ],
 } as const;

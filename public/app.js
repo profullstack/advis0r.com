@@ -500,6 +500,50 @@ function mountCharts(bars) {
 const fmtNum = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d }));
 const fmtBig = (n) => (n == null ? "—" : n >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${fmtNum(n)}`);
 const kv = (k, v, cls = "") => `<div class="kv"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
+const pctOf = (s) => (s && s.probability != null ? Math.round(s.probability * 100) + "%" : "—");
+
+/* Analysis section: shows the cached AI (LLM) analysis if present, else the
+   deterministic offline one, with a "Sharpen with AI" button (on-demand LLM). */
+function analysisBlock(d) {
+  const ai = d.aiAnalysis;
+  const src = ai ? ai.analysis : d.analysis;
+  if (!src || !src.thesis) return "";
+  const providers = d.aiProviders || [];
+  const overall = ai ? ai.overallScore : d.overallScore;
+  const conf = ai ? ai.confidence : d.confidence;
+  const head = ai
+    ? `<span class="badge audio">✨ AI · ${esc(ai.provider)}:${esc(ai.model)}</span>`
+    : `<span class="badge conservative">offline · deterministic</span>`;
+  const prov = providers.includes("anthropic") ? "anthropic" : providers[0];
+  const btn = providers.length
+    ? `<button class="sharpen-btn" data-sharpen="${esc(d.ticker)}" data-provider="${esc(prov)}">${ai ? "↻ Re-run AI" : "✨ Sharpen with AI"}</button>`
+    : "";
+  const chips = (arr, cls, mark) => (arr && arr.length ? `<div class="chips">${arr.slice(0, 6).map((x) => `<span class="chip ${cls}">${mark} ${esc(x)}</span>`).join("")}</div>` : "");
+  const scen = (src.bullCase || src.bearCase)
+    ? `<div class="an-sub">Scenarios</div><p class="thesis">Bull ${pctOf(src.bullCase)} · Base ${pctOf(src.baseCase)} · Bear ${pctOf(src.bearCase)}${src.bullCase?.assumptions?.[0] ? `<br><span class="sig-dir positive">Bull:</span> ${esc(src.bullCase.assumptions[0])}` : ""}${src.bearCase?.assumptions?.[0] ? `<br><span class="sig-dir negative">Bear:</span> ${esc(src.bearCase.assumptions[0])}` : ""}</p>`
+    : "";
+  const missing = src.missingData?.length ? `<div class="an-sub">Missing data</div><p class="src-note">${src.missingData.map(esc).join(" · ")}</p>` : "";
+  return `<div class="dl-section" id="ai-analysis-section">
+    <h3 class="an-head">Analysis ${head} <span class="an-spacer"></span> ${btn}</h3>
+    <p class="thesis">${esc(src.thesis)}</p>
+    <div class="grid2">${kv("Overall", (overall ?? "—") + "/100")}${kv("Confidence", (conf ?? "—") + "/100")}</div>
+    ${src.catalystSummary?.length ? `<div class="an-sub">Catalysts</div>${chips(src.catalystSummary, "pos", "▲")}` : ""}
+    ${src.riskSummary?.length ? `<div class="an-sub">Risks</div>${chips(src.riskSummary, "neg", "▼")}` : ""}
+    ${scen}${missing}
+  </div>`;
+}
+
+async function sharpen(ticker, provider) {
+  const sec = document.getElementById("ai-analysis-section");
+  if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><div class="spinner"></div><p class="empty">Running ${esc(provider)} analysis for ${esc(ticker)}… (~20s)</p>`;
+  try {
+    const r = await api(`/api/analyze?symbol=${encodeURIComponent(ticker)}&provider=${encodeURIComponent(provider)}&model=latest`);
+    const dd = { ticker, aiProviders: [provider], aiAnalysis: { provider: r.provider, model: r.model, overallScore: r.overallScore, confidence: r.confidence, analysis: r.analysis } };
+    if (sec) sec.outerHTML = analysisBlock(dd);
+  } catch (e) {
+    if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><p class="empty">Sharpen failed: ${esc(e.message)}</p><button class="sharpen-btn" data-sharpen="${esc(ticker)}" data-provider="${esc(provider)}">Retry</button>`;
+  }
+}
 
 function renderDetail(d) {
   const t = d.technical || {};
@@ -597,11 +641,7 @@ function renderDetail(d) {
       </div>
     </div>
 
-    ${a.thesis ? `<div class="dl-section"><h3>Offline analysis</h3>
-      <p class="thesis">${esc(a.thesis)}</p>
-      <div class="grid2">${kv("Overall", (d.overallScore ?? "—") + "/100")}${kv("Confidence", (d.confidence ?? "—") + "/100")}</div>
-      <div class="chips">${(a.catalystSummary || []).slice(0, 4).map((x) => `<span class="chip pos">▲ ${esc(x)}</span>`).join("")}${(a.riskSummary || []).slice(0, 4).map((x) => `<span class="chip neg">▼ ${esc(x)}</span>`).join("")}</div>
-    </div>` : ""}
+    ${analysisBlock(d)}
 
     ${sourcesHtml
       ? `<div class="dl-section"><h3>Transcripts &amp; media — what they said (${(d.sources || []).length})</h3><div class="sources">${sourcesHtml}</div></div>`
@@ -634,6 +674,8 @@ function closeDetail() {
   document.body.style.overflow = "";
 }
 document.addEventListener("click", (e) => {
+  const sh = e.target.closest(".sharpen-btn");
+  if (sh && sh.dataset.sharpen) { e.preventDefault(); sharpen(sh.dataset.sharpen, sh.dataset.provider); return; }
   const link = e.target.closest(".tlink");
   if (link && link.dataset.ticker) { e.preventDefault(); openTicker(link.dataset.ticker); return; }
   if (e.target.closest("[data-close]")) closeDetail();

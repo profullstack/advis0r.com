@@ -15,9 +15,10 @@ import {
   inputHash,
   promptHash,
 } from "../analysis/prompt.ts";
-import { analyzeWithRepair } from "../analysis/validate.ts";
+import { StockAnalysisSchema, stockAnalysisJsonSchema } from "../analysis/schema.ts";
 import { resolveModel } from "../analysis/aliases.ts";
 import { estimateTokens } from "../analysis/cost.ts";
+import type { StockAnalysis } from "../types.ts";
 
 const BASE = "https://api.anthropic.com/v1";
 const API_VERSION = "2023-06-01";
@@ -68,31 +69,31 @@ export class AnthropicProvider implements AnalysisProvider {
   async analyze(request: AnalysisRequest): Promise<AnalysisResult> {
     const model = await this.resolve(request.model);
     const user = buildUserPrompt(request);
-    const call = async (repairHint?: string): Promise<string> => {
-      const content = repairHint
-        ? `${user}\n\n${repairHint}\n\nRespond with ONLY the JSON object, no prose, no code fences.`
-        : `${user}\n\nRespond with ONLY the JSON object, no prose, no code fences.`;
-      const res = await fetch(`${BASE}/messages`, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({
-          model,
-          max_tokens: 4096,
-          temperature: this.temperature,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: "user", content }],
-        }),
-      });
-      if (!res.ok) throw new Error(`Anthropic analyze ${res.status}: ${await res.text()}`);
-      const body = (await res.json()) as any;
-      return stripFences(
-        (body.content ?? [])
-          .filter((b: any) => b.type === "text")
-          .map((b: any) => b.text)
-          .join(""),
-      );
-    };
-    const analysis = await analyzeWithRepair(call);
+    // Force structured output via tool use: the model must call this tool with
+    // arguments conforming to the schema — guarantees a complete, valid object.
+    const res = await fetch(`${BASE}/messages`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({
+        model,
+        max_tokens: 8000,
+        system: SYSTEM_PROMPT,
+        tools: [
+          {
+            name: "emit_stock_analysis",
+            description: "Emit the grounded StockAnalysis for the ticker. Every field is required.",
+            input_schema: stockAnalysisJsonSchema,
+          },
+        ],
+        tool_choice: { type: "tool", name: "emit_stock_analysis" },
+        messages: [{ role: "user", content: user }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic analyze ${res.status}: ${await res.text()}`);
+    const body = (await res.json()) as any;
+    const toolUse = (body.content ?? []).find((b: any) => b.type === "tool_use");
+    if (!toolUse?.input) throw new Error("Anthropic returned no tool_use block");
+    const analysis = StockAnalysisSchema.parse(toolUse.input) as StockAnalysis;
     return {
       provider: this.id,
       model,
@@ -118,8 +119,3 @@ export class AnthropicProvider implements AnalysisProvider {
   }
 }
 
-function stripFences(text: string): string {
-  const trimmed = text.trim();
-  const m = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  return (m ? m[1]! : trimmed).trim();
-}

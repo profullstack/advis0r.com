@@ -98,6 +98,28 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     args: [sym],
   });
 
+  // Latest cached LLM (non-offline) analysis, if one has been run before.
+  let aiAnalysis: unknown;
+  try {
+    const aiRs = await db.execute({
+      sql: `SELECT provider, model, output_json, overall_score, confidence, created_at
+            FROM analyses WHERE ticker = ? AND provider != 'offline'
+            ORDER BY created_at DESC LIMIT 1`,
+      args: [sym],
+    });
+    if (aiRs.rows.length) {
+      const r = aiRs.rows[0]!;
+      aiAnalysis = {
+        provider: r.provider,
+        model: r.model,
+        overallScore: r.overall_score,
+        confidence: r.confidence,
+        createdAt: r.created_at,
+        analysis: JSON.parse(String(r.output_json)),
+      };
+    }
+  } catch { /* ignore */ }
+
   // Group evidence by source document → per-transcript/video "what they said"
   // summary, with links and (for videos) an embeddable player.
   const docsRs = await db.execute({
@@ -153,6 +175,8 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     confidence,
     classification,
     analysis,
+    aiAnalysis,
+    aiProviders: [...registry.ai.keys()].filter((k) => k !== "offline"),
     bars: bars.map((b) => ({ t: b.timestamp.slice(0, 10), o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume })),
     signals: sigRs.rows,
     sources,
@@ -312,6 +336,39 @@ const server = Bun.serve({
         const symbol = url.searchParams.get("symbol");
         if (!symbol) return json({ error: "missing ?symbol=" }, 400);
         return json(await tickerDetail(symbol));
+      }
+
+      // On-demand LLM sharpening for one ticker (persisted → cached thereafter).
+      if (p === "/api/analyze") {
+        const symbol = url.searchParams.get("symbol");
+        if (!symbol) return json({ error: "missing ?symbol=" }, 400);
+        const provider = url.searchParams.get("provider") ?? config.ai.defaultProvider;
+        if (provider === "offline") return json({ error: "use /api/ticker for offline" }, 400);
+        const model = url.searchParams.get("model") ?? "latest";
+        try {
+          const outcome = await analyzeTicker(db, config, registry, symbol.toUpperCase(), {
+            topic: url.searchParams.get("topic") ?? symbol.toUpperCase(),
+            asOf: new Date().toISOString(),
+            horizonQuarters: 2,
+            provider,
+            model,
+            criteria: {},
+            persist: true,
+          });
+          if (!outcome.candidate) return json({ error: outcome.filterReasons.join("; ") || "no analysis" }, 502);
+          const c = outcome.candidate;
+          return json({
+            provider: c.provider,
+            model: c.model,
+            overallScore: c.overallScore,
+            confidence: c.confidence,
+            analysis: c.analysis,
+            analyzedAt: c.analyzedAt,
+            disclaimer: DISCLAIMER,
+          });
+        } catch (err) {
+          return json({ error: String(err) }, 502);
+        }
       }
 
       if (p === "/api/signals") {
