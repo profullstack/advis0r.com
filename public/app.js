@@ -514,15 +514,19 @@ function renderDetail(d) {
   const sourceCard = (s) => {
     const said = (s.said || []).map((q) =>
       `<div class="said-row"><span class="sig-dir ${esc(q.direction)}">${q.direction === "positive" ? "▲" : q.direction === "negative" ? "▼" : "•"} ${esc((q.signalType || "").replace(/_/g, " "))}</span><span class="said-q">"${esc((q.quote || "").slice(0, 220))}"</span></div>`).join("");
-    const media = s.kind === "video" && s.embedUrl
-      ? (s.direct
-          ? `<video class="src-video" controls preload="metadata" src="${esc(s.embedUrl)}"></video>`
-          : `<div class="src-embed"><iframe src="${esc(s.embedUrl)}" title="${esc(s.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`)
-      : "";
-    const linkLabel = s.kind === "video" ? "Watch ↗" : "Transcript ↗";
+    let media = "";
+    if (s.kind === "video" && s.embedUrl) {
+      media = s.direct
+        ? `<video class="src-video" controls preload="metadata" src="${esc(s.embedUrl)}"></video>`
+        : `<div class="src-embed"><iframe src="${esc(s.embedUrl)}" title="${esc(s.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+    } else if (s.kind === "audio" && s.embedUrl) {
+      media = `<audio class="src-audio" controls preload="metadata" src="${esc(s.embedUrl)}"></audio>`;
+    }
+    const badge = s.kind === "video" ? { cls: "speculative", label: "▶ Video" } : s.kind === "audio" ? { cls: "audio", label: "♪ Audio" } : { cls: "conservative", label: "≡ Transcript" };
+    const linkLabel = s.kind === "video" ? "Watch ↗" : s.kind === "audio" ? "Listen ↗" : "Transcript ↗";
     return `<div class="source">
       <div class="source-head">
-        <span class="badge ${s.kind === "video" ? "speculative" : "conservative"}">${s.kind === "video" ? "▶ Video" : "≡ Transcript"}</span>
+        <span class="badge ${badge.cls}">${badge.label}</span>
         <span class="source-type">${esc(evLabel(s.eventType))}${s.publishedAt ? " · " + esc(String(s.publishedAt).slice(0, 10)) : ""}</span>
         <span class="source-counts">${s.positive ? `<span class="pos">▲${s.positive}</span>` : ""} ${s.negative ? `<span class="neg">▼${s.negative}</span>` : ""}</span>
         <a class="source-link" href="${esc(s.url)}" target="_blank" rel="noopener">${linkLabel}</a>

@@ -160,14 +160,20 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
   };
 }
 
-/** Classify a source URL as a transcript or an embeddable video. */
-function classifySource(url: string, eventType: string): { kind: "transcript" | "video"; embedUrl?: string; direct?: boolean } {
+/** Classify a source URL as a transcript, an embeddable video, or audio. */
+function classifySource(
+  url: string,
+  eventType: string,
+): { kind: "transcript" | "video" | "audio"; embedUrl?: string; direct?: boolean } {
   const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|live\/)|youtu\.be\/)([\w-]{6,})/i);
   if (yt) return { kind: "video", embedUrl: `https://www.youtube.com/embed/${yt[1]}` };
   const vim = url.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
   if (vim) return { kind: "video", embedUrl: `https://player.vimeo.com/video/${vim[1]}` };
-  if (/\.(mp4|webm|ogv|mov)(\?|#|$)/i.test(url)) return { kind: "video", embedUrl: url, direct: true };
+  if (/\.(mp4|webm|ogv|mov|m4v)(\?|#|$)/i.test(url)) return { kind: "video", embedUrl: url, direct: true };
+  // Audio: direct audio files or podcast enclosures.
+  if (/\.(mp3|m4a|wav|aac|flac|opus|ogg|oga)(\?|#|$)/i.test(url)) return { kind: "audio", embedUrl: url, direct: true };
   if (eventType === "video") return { kind: "video", embedUrl: url };
+  if (eventType === "podcast") return { kind: "audio", embedUrl: url, direct: true };
   return { kind: "transcript" };
 }
 
