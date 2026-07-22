@@ -98,6 +98,44 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     args: [sym],
   });
 
+  // Group evidence by source document → per-transcript/video "what they said"
+  // summary, with links and (for videos) an embeddable player.
+  const docsRs = await db.execute({
+    sql: `SELECT d.url, d.title, d.event_type, d.published_at
+          FROM documents d JOIN transcripts t ON t.document_id = d.id
+          WHERE t.primary_ticker = ?`,
+    args: [sym],
+  });
+  const docByUrl = new Map(docsRs.rows.map((r) => [String(r.url), r]));
+  const byUrl = new Map<string, any[]>();
+  for (const s of sigRs.rows) {
+    const u = String(s.source_url || "");
+    if (!u) continue;
+    (byUrl.get(u) ?? byUrl.set(u, []).get(u)!).push(s);
+  }
+  const sources = [...byUrl.entries()]
+    .map(([url, sigs]) => {
+      const doc: any = docByUrl.get(url) ?? {};
+      const cls = classifySource(url, String(doc.event_type ?? ""));
+      const pos = sigs.filter((s) => s.direction === "positive").length;
+      const neg = sigs.filter((s) => s.direction === "negative").length;
+      return {
+        url,
+        title: doc.title ?? url,
+        eventType: doc.event_type ?? "document",
+        publishedAt: doc.published_at ?? sigs[0]?.event_date ?? null,
+        kind: cls.kind,
+        embedUrl: cls.embedUrl,
+        direct: cls.direct ?? false,
+        positive: pos,
+        negative: neg,
+        said: sigs
+          .slice(0, 8)
+          .map((s) => ({ signalType: s.signal_type, direction: s.direction, quote: s.quote, eventDate: s.event_date })),
+      };
+    })
+    .sort((a, b) => String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")));
+
   return {
     ticker: sym,
     companyName: facts.companyName ?? asset?.name ?? sym,
@@ -117,8 +155,20 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     analysis,
     bars: bars.map((b) => ({ t: b.timestamp.slice(0, 10), o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume })),
     signals: sigRs.rows,
+    sources,
     disclaimer: DISCLAIMER,
   };
+}
+
+/** Classify a source URL as a transcript or an embeddable video. */
+function classifySource(url: string, eventType: string): { kind: "transcript" | "video"; embedUrl?: string; direct?: boolean } {
+  const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|live\/)|youtu\.be\/)([\w-]{6,})/i);
+  if (yt) return { kind: "video", embedUrl: `https://www.youtube.com/embed/${yt[1]}` };
+  const vim = url.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
+  if (vim) return { kind: "video", embedUrl: `https://player.vimeo.com/video/${vim[1]}` };
+  if (/\.(mp4|webm|ogv|mov)(\?|#|$)/i.test(url)) return { kind: "video", embedUrl: url, direct: true };
+  if (eventType === "video") return { kind: "video", embedUrl: url };
+  return { kind: "transcript" };
 }
 
 function json(data: unknown, status = 200): Response {

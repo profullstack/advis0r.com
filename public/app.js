@@ -509,6 +509,31 @@ function renderDetail(d) {
   const clsBadge = d.classification
     ? `<span class="badge ${d.classification === "high-risk speculative" ? "high" : d.classification === "speculative" ? "speculative" : "conservative"}">${esc(d.classification)}</span>`
     : "";
+  const evLabel = (t) => ({ earnings_call: "Earnings call", investor_day: "Investor day", conference: "Conference", keynote: "Keynote", fireside_chat: "Fireside chat", interview: "Interview", shareholder_meeting: "Shareholder meeting", product_launch: "Product launch", press_conference: "Press conference", podcast: "Podcast", presentation: "Presentation", sec_exhibit: "SEC exhibit", blog_post: "Blog post", video: "Video" }[t] || (t || "Document"));
+
+  const sourceCard = (s) => {
+    const said = (s.said || []).map((q) =>
+      `<div class="said-row"><span class="sig-dir ${esc(q.direction)}">${q.direction === "positive" ? "▲" : q.direction === "negative" ? "▼" : "•"} ${esc((q.signalType || "").replace(/_/g, " "))}</span><span class="said-q">"${esc((q.quote || "").slice(0, 220))}"</span></div>`).join("");
+    const media = s.kind === "video" && s.embedUrl
+      ? (s.direct
+          ? `<video class="src-video" controls preload="metadata" src="${esc(s.embedUrl)}"></video>`
+          : `<div class="src-embed"><iframe src="${esc(s.embedUrl)}" title="${esc(s.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`)
+      : "";
+    const linkLabel = s.kind === "video" ? "Watch ↗" : "Transcript ↗";
+    return `<div class="source">
+      <div class="source-head">
+        <span class="badge ${s.kind === "video" ? "speculative" : "conservative"}">${s.kind === "video" ? "▶ Video" : "≡ Transcript"}</span>
+        <span class="source-type">${esc(evLabel(s.eventType))}${s.publishedAt ? " · " + esc(String(s.publishedAt).slice(0, 10)) : ""}</span>
+        <span class="source-counts">${s.positive ? `<span class="pos">▲${s.positive}</span>` : ""} ${s.negative ? `<span class="neg">▼${s.negative}</span>` : ""}</span>
+        <a class="source-link" href="${esc(s.url)}" target="_blank" rel="noopener">${linkLabel}</a>
+      </div>
+      ${media}
+      ${said ? `<div class="said">${said}</div>` : ""}
+    </div>`;
+  };
+  const sourcesHtml = (d.sources || []).map(sourceCard).join("");
+
+  // Fallback: raw signals if no source grouping is available.
   const sig = (d.signals || []).slice(0, 12).map((x) =>
     `<div class="res"><div class="meta"><span class="sig-dir ${esc(x.direction)}">${esc(x.signal_type)} · ${esc(x.direction)}</span><span>${esc(x.event_date || "")}</span><span>str ${Number(x.strength).toFixed(2)}</span></div><div class="txt">${esc((x.quote || "").slice(0, 240))}</div></div>`).join("");
 
@@ -574,7 +599,11 @@ function renderDetail(d) {
       <div class="chips">${(a.catalystSummary || []).slice(0, 4).map((x) => `<span class="chip pos">▲ ${esc(x)}</span>`).join("")}${(a.riskSummary || []).slice(0, 4).map((x) => `<span class="chip neg">▼ ${esc(x)}</span>`).join("")}</div>
     </div>` : ""}
 
-    ${sig ? `<div class="dl-section"><h3>Signals (${(d.signals || []).length})</h3><div class="results">${sig}</div></div>` : ""}
+    ${sourcesHtml
+      ? `<div class="dl-section"><h3>Transcripts &amp; media — what they said (${(d.sources || []).length})</h3><div class="sources">${sourcesHtml}</div></div>`
+      : sig
+        ? `<div class="dl-section"><h3>Signals (${(d.signals || []).length})</h3><div class="results">${sig}</div></div>`
+        : ""}
 
     <p class="src-note">Price data: ${esc(d.marketSource)} (${d.delayed ? "end-of-day, delayed" : "real-time"}). Fundamentals: SEC EDGAR. Indicators computed locally. ${d.marketError ? "Market data note: " + esc(d.marketError) : ""}</p>
     <div class="disclaimer">${esc(d.disclaimer || "")}</div>`;
