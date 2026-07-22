@@ -404,15 +404,15 @@ function mountMacdChart(bars) {
   const { macd, signal, hist } = macdSeries(closes, 12, 26, 9);
   const chart = baseChart(el, 150);
 
-  // Histogram first (drawn under the lines), green/red by sign.
+  // Whitespace for nulls keeps the axis aligned with the other panes.
   const histSeries = chart.addSeries(LWC.HistogramSeries, { priceLineVisible: false, lastValueVisible: false });
-  histSeries.setData(bars.map((b, i) => (hist[i] == null ? null : { time: b.t, value: hist[i], color: hist[i] >= 0 ? "rgba(34,197,94,0.55)" : "rgba(248,113,113,0.55)" })).filter(Boolean));
+  histSeries.setData(bars.map((b, i) => (hist[i] == null ? { time: b.t } : { time: b.t, value: hist[i], color: hist[i] >= 0 ? "rgba(34,197,94,0.55)" : "rgba(248,113,113,0.55)" })));
 
   const macdLine = chart.addSeries(LWC.LineSeries, { color: "#4c8dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
-  macdLine.setData(bars.map((b, i) => (macd[i] == null ? null : { time: b.t, value: macd[i] })).filter(Boolean));
+  macdLine.setData(bars.map((b, i) => (macd[i] == null ? { time: b.t } : { time: b.t, value: macd[i] })));
 
   const sigLine = chart.addSeries(LWC.LineSeries, { color: "#ffb454", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  sigLine.setData(bars.map((b, i) => (signal[i] == null ? null : { time: b.t, value: signal[i] })).filter(Boolean));
+  sigLine.setData(bars.map((b, i) => (signal[i] == null ? { time: b.t } : { time: b.t, value: signal[i] })));
 
   chart.timeScale().fitContent();
 }
@@ -425,16 +425,43 @@ function mountRsiChart(bars) {
   const chart = baseChart(el, 130);
   chart.applyOptions({ rightPriceScale: { borderColor: chartColors.border, autoScale: false, scaleMargins: { top: 0.1, bottom: 0.1 } } });
   const line = chart.addSeries(LWC.LineSeries, { color: "#c48dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
-  line.setData(bars.map((b, i) => (r[i] == null ? null : { time: b.t, value: r[i] })).filter(Boolean));
+  // Whitespace ({time} with no value) for leading nulls keeps the time axis
+  // identical to the price chart so synced zoom stays aligned.
+  line.setData(bars.map((b, i) => (r[i] == null ? { time: b.t } : { time: b.t, value: r[i] })));
   line.createPriceLine({ price: 70, color: "rgba(248,113,113,.5)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "70" });
   line.createPriceLine({ price: 30, color: "rgba(34,197,94,.5)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "30" });
   chart.timeScale().fitContent();
 }
 
+/* Keep every pane's time axis locked together: zoom/pan one → all follow.
+   Guarded by a range-diff check so the cross-updates don't loop. */
+function syncTimeScales(charts) {
+  const list = charts.filter(Boolean);
+  for (const src of list) {
+    src.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range) return;
+      for (const tgt of list) {
+        if (tgt === src) continue;
+        const ts = tgt.timeScale();
+        const cur = ts.getVisibleLogicalRange();
+        if (!cur || Math.abs(cur.from - range.from) > 0.4 || Math.abs(cur.to - range.to) > 0.4) {
+          try { ts.setVisibleLogicalRange(range); } catch {}
+        }
+      }
+    });
+  }
+}
+
 function mountCharts(bars) {
   destroyCharts();
   // Defer to next frame so the modal has laid out and containers have width.
-  requestAnimationFrame(() => { mountPriceChart(bars); mountRsiChart(bars); mountMacdChart(bars); });
+  requestAnimationFrame(() => {
+    mountPriceChart(bars);
+    mountRsiChart(bars);
+    mountMacdChart(bars);
+    // liveCharts now holds [price, rsi?, macd?] in creation order — sync them.
+    syncTimeScales(liveCharts);
+  });
 }
 
 const fmtNum = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d }));
