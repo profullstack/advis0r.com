@@ -210,6 +210,19 @@ function json(data: unknown, status = 200): Response {
 
 const NO_STORE = { "cache-control": "no-store, no-cache, must-revalidate" };
 
+// Suggested topics for the watchlist dropdown (users may also type any topic).
+const SUGGESTED_TOPICS = [
+  "AI infrastructure", "artificial intelligence", "generative AI", "large language models",
+  "data center", "semiconductor", "GPU accelerator", "chip foundry", "memory chips",
+  "cloud computing", "cloud security", "cybersecurity", "quantum computing", "edge computing",
+  "robotics", "industrial automation", "autonomous vehicles", "electric vehicle", "lithium battery",
+  "solar energy", "wind energy", "nuclear energy", "energy storage", "hydrogen fuel", "smart grid",
+  "biotechnology", "gene therapy", "oncology", "medical devices", "clinical trials", "diagnostics",
+  "fintech", "digital payments", "blockchain", "cryptocurrency", "e-commerce", "software as a service",
+  "gaming", "streaming media", "digital advertising", "aerospace", "defense contract", "space launch",
+  "satellite", "drones", "5G wireless", "internet of things", "supply chain", "3D printing", "carbon capture",
+];
+
 async function serveStatic(pathname: string): Promise<Response> {
   const rel = pathname === "/" ? "/index.html" : pathname;
   const safe = normalize(rel).replace(/^(\.\.(\/|\\|$))+/, "");
@@ -295,6 +308,10 @@ const server = Bun.serve({
           out[t] = Number(rs.rows[0]?.n ?? 0);
         }
         return json(out);
+      }
+
+      if (p === "/api/topics") {
+        return json({ topics: SUGGESTED_TOPICS });
       }
 
       if (p === "/api/tickers") {

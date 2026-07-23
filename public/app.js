@@ -146,9 +146,18 @@ async function sharpenAll() {
   await runWatchlist(); // re-render with cached AI scores + re-rank
 }
 
+async function loadTopics() {
+  try {
+    const { topics } = await api("/api/topics");
+    $("#topic-list").innerHTML = (topics || []).map((t) => `<option value="${esc(t)}"></option>`).join("");
+  } catch { /* dropdown is a convenience; typing still works */ }
+}
+
 $("#wl-run").addEventListener("click", runWatchlist);
 $("#wl-sharpen").addEventListener("click", sharpenAll);
 $("#wl-topic").addEventListener("keydown", (e) => e.key === "Enter" && runWatchlist());
+// Picking a suggestion from the datalist fires an 'input' change → run it.
+$("#wl-topic").addEventListener("change", () => runWatchlist());
 
 /* ---- Search ---- */
 async function runSearch() {
@@ -191,6 +200,7 @@ $("#sig-ticker").addEventListener("keydown", (e) => e.key === "Enter" && runSign
 /* ---- Boot ---- */
 async function boot() {
   await loadHealthAndStats();
+  loadTopics();
   const disc = "This output is generated from public information and automated analysis. It is a research aid, not a guarantee, personalized recommendation, or substitute for professional financial advice. Small-cap and low-priced stocks may be highly volatile, illiquid, subject to dilution, manipulation, delisting, and total loss.";
   $("#disclaimer").textContent = disc;
   const start = (location.hash || "#watchlist").slice(1);

@@ -30,7 +30,8 @@
       <!-- Watchlist -->
       <section class="view active" data-view="watchlist">
         <div class="controls">
-          <input id="wl-topic" type="search" placeholder="Topic (e.g. AI infrastructure)" autocomplete="off" />
+          <input id="wl-topic" type="search" list="topic-list" placeholder="Pick or type a topic (e.g. AI infrastructure)" autocomplete="off" />
+          <datalist id="topic-list"></datalist>
           <select id="wl-horizon" aria-label="Horizon">
             <option value="2">2 quarters</option>
             <option value="1">1 quarter</option>
