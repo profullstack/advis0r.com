@@ -63,13 +63,15 @@ function candidateCard(c) {
   const price = c.lastPrice != null ? `$${Number(c.lastPrice).toFixed(2)}` : "—";
   const mcap = c.marketCap != null ? fmtCap(c.marketCap) : "—";
   const ev = (a.evidenceIds || []).length;
+  const isAI = c.provider && c.provider !== "offline";
   return `
-    <article class="card ${cardRisk(c.classification)}">
+    <article class="card ${cardRisk(c.classification)}" data-ticker="${esc(c.ticker)}">
       <div class="card-head">
         <span class="rank">#${c.rank}</span>
         <span class="tkr tlink" data-ticker="${esc(c.ticker)}">${esc(c.ticker)}</span>
         <span class="cname">${esc(c.companyName || "")}</span>
         <span class="spacer"></span>
+        ${isAI ? `<span class="badge audio">✨ ${esc(c.model || "AI")}</span>` : ""}
         <span class="badge ${classClass(c.classification)}">${esc(c.classification)}</span>
       </div>
       <div class="scores">
@@ -98,6 +100,7 @@ function fmtCap(n) {
   return `$${n.toFixed(0)}`;
 }
 
+let lastWatchlist = [];
 async function runWatchlist() {
   const topic = $("#wl-topic").value.trim();
   const horizon = $("#wl-horizon").value;
@@ -111,7 +114,10 @@ async function runWatchlist() {
     if (topic) qs.set("topic", topic);
     const data = await api(`/api/discover?${qs}`);
     const cs = data.candidates || [];
-    $("#wl-summary").textContent = `topic: ${data.topic || "(whole index)"} · ${cs.length} candidates · ${data.provider} analyzer · ${data.horizonQuarters}Q horizon`;
+    lastWatchlist = cs;
+    const aiCount = cs.filter((c) => c.provider && c.provider !== "offline").length;
+    $("#wl-summary").textContent = `topic: ${data.topic || "(whole index)"} · ${cs.length} candidates · ${aiCount}/${cs.length} AI-sharpened · ${data.horizonQuarters}Q horizon`;
+    $("#wl-sharpen").style.display = cs.length ? "" : "none";
     list.innerHTML = cs.length ? cs.map(candidateCard).join("") : `<div class="empty">No candidates. Index some transcripts first (CLI: <code>transcripts sync "&lt;topic&gt;"</code>).</div>`;
   } catch (e) {
     list.innerHTML = `<div class="empty">Failed to load watchlist (${esc(e.message)}).</div>`;
@@ -119,7 +125,29 @@ async function runWatchlist() {
     btn.disabled = false;
   }
 }
+
+async function sharpenAll() {
+  if (!lastWatchlist.length) return;
+  const btn = $("#wl-sharpen");
+  btn.disabled = true;
+  const total = lastWatchlist.length;
+  const tickers = lastWatchlist.map((c) => c.ticker);
+  for (let i = 0; i < total; i++) {
+    const t = tickers[i];
+    $("#wl-summary").textContent = `Sharpening ${i + 1}/${total} with AI — ${t}…`;
+    const card = document.querySelector(`.card[data-ticker="${t}"]`);
+    if (card) card.style.opacity = "0.5";
+    try {
+      await api(`/api/analyze?symbol=${encodeURIComponent(t)}&model=latest`);
+    } catch { /* skip failures, keep going */ }
+    if (card) card.style.opacity = "";
+  }
+  btn.disabled = false;
+  await runWatchlist(); // re-render with cached AI scores + re-rank
+}
+
 $("#wl-run").addEventListener("click", runWatchlist);
+$("#wl-sharpen").addEventListener("click", sharpenAll);
 $("#wl-topic").addEventListener("keydown", (e) => e.key === "Enter" && runWatchlist());
 
 /* ---- Search ---- */

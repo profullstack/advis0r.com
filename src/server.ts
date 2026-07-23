@@ -422,6 +422,35 @@ const server = Bun.serve({
             /* skip individual failures */
           }
         }
+        // Overlay any cached LLM analyses so a sharpened watchlist shows AI
+        // scores/theses and re-ranks by them (no new spend).
+        const syms = ranked.map((c) => c.ticker);
+        if (syms.length) {
+          const ph = syms.map(() => "?").join(",");
+          const aiRs = await db.execute({
+            sql: `SELECT a.ticker, a.provider, a.model, a.output_json, a.overall_score, a.confidence
+                  FROM analyses a
+                  JOIN (SELECT ticker, MAX(created_at) mc FROM analyses
+                        WHERE provider != 'offline' AND ticker IN (${ph}) GROUP BY ticker) l
+                  ON a.ticker = l.ticker AND a.created_at = l.mc
+                  WHERE a.provider != 'offline'`,
+            args: syms,
+          });
+          const aiByTicker = new Map(aiRs.rows.map((r) => [String(r.ticker), r]));
+          for (const c of ranked) {
+            const ai: any = aiByTicker.get(c.ticker);
+            if (!ai) continue;
+            c.overallScore = Number(ai.overall_score);
+            c.confidence = Number(ai.confidence);
+            c.analysis = JSON.parse(String(ai.output_json));
+            c.provider = String(ai.provider);
+            c.model = String(ai.model);
+            c.thesis = c.analysis.thesis;
+            c.primaryCatalyst = c.analysis.catalystSummary?.[0];
+            c.mainRisk = c.analysis.riskSummary?.[0];
+            c.classification = classifyRisk(c.overallScore, c.confidence, c.lastPrice);
+          }
+        }
         ranked.sort((a, b) => b.overallScore - a.overallScore);
         ranked.forEach((c, i) => (c.rank = i + 1));
         return json({ topic: topic ?? null, provider, horizonQuarters: horizon, candidates: ranked, disclaimer: DISCLAIMER });
