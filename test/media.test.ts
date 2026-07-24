@@ -20,7 +20,16 @@ import {
   planChunks,
   CHUNK_SECONDS,
   OVERLAP_SECONDS,
+  selectAsrProvider,
 } from "../src/providers/media/asr.ts";
+import {
+  labelSpeaker,
+  wordsToSegments,
+} from "../src/providers/media/asr-elevenlabs.ts";
+import {
+  verboseJsonToSegments,
+  whisperCostUsd,
+} from "../src/providers/media/asr-openai.ts";
 import { parseDuration, parseEpisodes, episodeMentions } from "../src/providers/media/podcast.ts";
 import { classifyVideo } from "../src/providers/media/index.ts";
 import { isBotBlocked, timestampUrl, videoId } from "../src/providers/media/youtube.ts";
@@ -269,5 +278,113 @@ describe("speaker attribution", () => {
     const segs = attributeSegments([{ index: 0, text: "some unlabelled prose here." }]);
     expect(segs[0]!.speaker).toBeUndefined();
     expect(attributionRate(segs)).toBe(0);
+  });
+});
+
+describe("ASR backend selection", () => {
+  test("prefers ElevenLabs — it is the only backend returning diarization", () => {
+    expect(
+      selectAsrProvider({ elevenLabsApiKey: "e", groqApiKey: "g", openaiApiKey: "o" }),
+    ).toBe("elevenlabs");
+  });
+
+  test("falls back to Groq, then OpenAI, by cost", () => {
+    expect(selectAsrProvider({ groqApiKey: "g", openaiApiKey: "o" })).toBe("groq");
+    expect(selectAsrProvider({ openaiApiKey: "o" })).toBe("openai");
+  });
+
+  test("legacy single-key form still selects Groq", () => {
+    expect(selectAsrProvider({ apiKey: "g" })).toBe("groq");
+  });
+
+  test("returns null with no credentials so callers degrade to captions", () => {
+    expect(selectAsrProvider({})).toBeNull();
+  });
+
+  test("an explicit backend without its key is not silently substituted", () => {
+    // Picking a different provider than asked would send audio to an
+    // unintended vendor — fail closed instead.
+    expect(selectAsrProvider({ backend: "elevenlabs", groqApiKey: "g" })).toBeNull();
+    expect(selectAsrProvider({ backend: "groq", groqApiKey: "g" })).toBe("groq");
+  });
+});
+
+describe("ElevenLabs Scribe word grouping", () => {
+  const word = (text: string, start: number, speaker: string) => ({
+    text, start, end: start + 0.3, type: "word", speaker_id: speaker,
+  });
+
+  test("groups words into timestamped segments", () => {
+    const segs = wordsToSegments({
+      words: [word("We", 1.0, "speaker_0"), word("raised", 1.4, "speaker_0"), word("guidance.", 1.8, "speaker_0")],
+    });
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.text).toBe("We raised guidance.");
+    expect(segs[0]!.startMs).toBe(1000);
+    expect(segs[0]!.speaker).toBe("Speaker 1");
+  });
+
+  test("a speaker change forces a segment break", () => {
+    // Critical: one speaker per segment, so a quote is never attributed to
+    // the wrong person (PRD §8.4).
+    const segs = wordsToSegments({
+      words: [
+        word("Demand", 0, "speaker_0"), word("accelerated.", 0.4, "speaker_0"),
+        word("Thanks", 1.0, "speaker_1"), word("Jensen.", 1.4, "speaker_1"),
+      ],
+    });
+    expect(segs).toHaveLength(2);
+    expect(segs[0]!.speaker).toBe("Speaker 1");
+    expect(segs[1]!.speaker).toBe("Speaker 2");
+    expect(segs[1]!.startMs).toBe(1000);
+  });
+
+  test("non-word tokens (spacing, audio events) are dropped", () => {
+    const segs = wordsToSegments({
+      words: [
+        word("Revenue", 0, "speaker_0"),
+        { text: " ", start: 0.3, type: "spacing", speaker_id: "speaker_0" },
+        { text: "(laughter)", start: 0.4, type: "audio_event", speaker_id: "speaker_0" },
+        word("rose.", 0.6, "speaker_0"),
+      ],
+    });
+    expect(segs[0]!.text).toBe("Revenue rose.");
+  });
+
+  test("falls back to plain text when no word timings are returned", () => {
+    const segs = wordsToSegments({ text: "Plain transcript." });
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.startMs).toBe(0);
+  });
+
+  test("empty response yields no segments rather than throwing", () => {
+    expect(wordsToSegments({})).toEqual([]);
+  });
+
+  test("diarized speakers get honest anonymous labels, never invented names", () => {
+    expect(labelSpeaker("speaker_0")).toBe("Speaker 1");
+    expect(labelSpeaker("speaker_11")).toBe("Speaker 12");
+  });
+});
+
+describe("OpenAI Whisper mapping", () => {
+  test("verbose_json segments map to millisecond offsets", () => {
+    const segs = verboseJsonToSegments({
+      segments: [
+        { start: 0.5, end: 2.0, text: " We raised guidance. " },
+        { start: 2.0, end: 3.0, text: "  " },
+      ],
+    });
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.startMs).toBe(500);
+    expect(segs[0]!.text).toBe("We raised guidance.");
+  });
+
+  test("text-only response still yields a segment", () => {
+    expect(verboseJsonToSegments({ text: "hello" })[0]!.text).toBe("hello");
+  });
+
+  test("cost matches the published per-minute rate", () => {
+    expect(whisperCostUsd(3_600_000)).toBeCloseTo(0.36, 4);
   });
 });
