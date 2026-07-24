@@ -171,9 +171,219 @@ program
       console.log(
         `Indexed ${result.documents} document(s), ${result.segments} segment(s), ${result.signals} signal(s).`,
       );
+      if (result.boilerplateSuppressed) {
+        console.log(
+          `Suppressed ${result.boilerplateSuppressed} boilerplate match(es) (PRD v3 §4.1).`,
+        );
+      }
       if (result.errors.length) {
         console.error(`${result.errors.length} error(s):`);
         for (const e of result.errors.slice(0, 5)) console.error(`  - ${e}`);
+      }
+    });
+  });
+
+// --- news -----------------------------------------------------------------
+program
+  .command("news <tickers...>")
+  .description(
+    "Ingest reputable news coverage for tickers: RSS + ValueSERP discovery, self-fetched article bodies, reputation-tiered (PRD v3 §3).",
+  )
+  .option("--from <date>", "only articles on/after this ISO date")
+  .option("--to <date>", "anchor date for relative article dates (ISO)")
+  .option("--per-ticker <n>", "max articles per ticker", "12")
+  .option("--exclude-tier3", "skip excluded/promo sources entirely", false)
+  .option("--wires", "also scan newswire firehose feeds", false)
+  .action(async (tickers: string[], opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const { ingest } = await import("./pipeline/ingest.ts");
+      const { NewsProvider } = await import("./providers/news/index.ts");
+      const symbols = tickers.map((t) => t.toUpperCase());
+
+      const provider = new NewsProvider({
+        downloadsDir: config.downloadsDir,
+        valueSerpKey: config.secrets.valueSerpApiKey,
+        perTicker: Number(opts.perTicker) || 12,
+        excludeTier3: Boolean(opts.excludeTier3),
+        includeWires: Boolean(opts.wires),
+      });
+      provider.setCompanyNames(await loadCompanyNames(db, symbols));
+
+      console.error(
+        `Discovery: RSS (keyless)${provider.serpConfigured ? " + ValueSERP" : " — ValueSERP key not set"}`,
+      );
+
+      const result = await ingest(
+        db,
+        config,
+        [provider],
+        { topic: "news", from: opts.from, to: opts.to, tickers: symbols },
+        (msg) => console.error(`  ${msg}`),
+      );
+      console.log(
+        `Indexed ${result.documents} article(s), ${result.segments} segment(s), ${result.signals} signal(s).`,
+      );
+      if (result.boilerplateSuppressed) {
+        console.log(`Suppressed ${result.boilerplateSuppressed} boilerplate match(es).`);
+      }
+      const tierRs = await db.execute(
+        `SELECT source_tier, COUNT(*) n FROM documents WHERE provider_id = 'news' GROUP BY 1 ORDER BY 1`,
+      );
+      if (tierRs.rows.length) {
+        console.log("News corpus by tier:");
+        for (const r of tierRs.rows) console.log(`  tier ${r.source_tier}: ${r.n}`);
+      }
+      if (result.errors.length) {
+        console.error(`${result.errors.length} error(s):`);
+        for (const e of result.errors.slice(0, 5)) console.error(`  - ${e}`);
+      }
+      void registry;
+    });
+  });
+
+/** Company names already known from indexed SEC filings, for better queries. */
+async function loadCompanyNames(
+  db: ReturnType<typeof getDb>,
+  tickers: string[],
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  if (tickers.length === 0) return names;
+  const rs = await db.execute(
+    `SELECT DISTINCT t.primary_ticker AS ticker, d.meta_json AS meta
+     FROM transcripts t JOIN documents d ON d.id = t.document_id
+     WHERE t.primary_ticker IS NOT NULL AND d.meta_json IS NOT NULL`,
+  );
+  const wanted = new Set(tickers);
+  for (const row of rs.rows) {
+    const ticker = String(row.ticker ?? "").toUpperCase();
+    if (!wanted.has(ticker) || names.has(ticker)) continue;
+    try {
+      const meta = JSON.parse(String(row.meta ?? "{}"));
+      if (meta.companyName) names.set(ticker, String(meta.companyName));
+    } catch {
+      /* malformed meta is not fatal */
+    }
+  }
+  return names;
+}
+
+// --- media ----------------------------------------------------------------
+program
+  .command("media <tickers...>")
+  .description(
+    "Ingest audio/video appearances — earnings calls, keynotes, conferences, podcasts (PRD v3 §2).",
+  )
+  .option("--from <date>", "only media published on/after this ISO date")
+  .option("--per-ticker <n>", "max media items per ticker", "4")
+  .option("--no-asr", "captions only; never spend on speech-to-text")
+  .option("--channels <urls>", "extra YouTube channel/playlist URLs (comma-separated)")
+  .action(async (tickers: string[], opts) => {
+    await withApp(async ({ config, db }) => {
+      const { ingest } = await import("./pipeline/ingest.ts");
+      const { MediaProvider } = await import("./providers/media/index.ts");
+      const symbols = tickers.map((t) => t.toUpperCase());
+
+      const provider = new MediaProvider({
+        downloadsDir: config.downloadsDir,
+        groqApiKey: config.secrets.groqApiKey,
+        perTicker: Number(opts.perTicker) || 4,
+        allowAsr: opts.asr !== false,
+        channels: opts.channels ? String(opts.channels).split(",").map((s) => s.trim()) : undefined,
+      });
+      provider.setCompanyNames(await loadCompanyNames(db, symbols));
+
+      console.error(
+        `Transcript sources: captions (keyless)${provider.asrConfigured && opts.asr !== false ? " + Groq ASR" : " — ASR disabled or GROQ_API_KEY unset"}`,
+      );
+
+      const result = await ingest(
+        db,
+        config,
+        [provider],
+        { topic: "media", from: opts.from, tickers: symbols },
+        (msg) => console.error(`  ${msg}`),
+      );
+      console.log(
+        `Indexed ${result.documents} media transcript(s), ${result.segments} segment(s), ${result.signals} signal(s).`,
+      );
+      if (result.boilerplateSuppressed) {
+        console.log(`Suppressed ${result.boilerplateSuppressed} boilerplate match(es).`);
+      }
+      const rs = await db.execute(
+        `SELECT event_type, provenance, COUNT(*) n FROM documents
+         WHERE provider_id = 'media' GROUP BY 1, 2 ORDER BY n DESC`,
+      );
+      if (rs.rows.length) {
+        console.log("Media corpus:");
+        for (const r of rs.rows) {
+          console.log(`  ${r.event_type} (${r.provenance ?? "?"}): ${r.n}`);
+        }
+      }
+      if (result.errors.length) {
+        console.error(`${result.errors.length} note(s)/error(s):`);
+        for (const e of result.errors.slice(0, 6)) console.error(`  - ${e}`);
+      }
+    });
+  });
+
+// --- corroborate ----------------------------------------------------------
+program
+  .command("corroborate [tickers...]")
+  .description(
+    "Link primary claims to independent confirmation across sources; flag promotional coverage (PRD v3 §3.4, §3.5).",
+  )
+  .option("--min-overlap <n>", "fraction of claim terms that must match", "0.35")
+  .action(async (tickers: string[], opts) => {
+    await withApp(async ({ db }) => {
+      const { corroborate } = await import("./corroborate/engine.ts");
+      const result = await corroborate(
+        db,
+        {
+          tickers: tickers?.length ? tickers : undefined,
+          minOverlap: Number(opts.minOverlap) || 0.35,
+        },
+        (msg) => console.error(`  ${msg}`),
+      );
+      console.log(
+        `Scanned ${result.tickersScanned} ticker(s), ${result.claimsScanned} claim(s).`,
+      );
+      console.log(
+        `Confirms: ${result.confirms}  Contradicts: ${result.contradicts}  Amplifies-only: ${result.amplifiesOnly}`,
+      );
+      if (result.promotionFlags.length) {
+        console.log(
+          `Promotional coverage flagged: ${result.promotionFlags.join(", ")}`,
+        );
+      }
+    });
+  });
+
+// --- reclassify -----------------------------------------------------------
+program
+  .command("reclassify")
+  .description(
+    "Rebuild the corpus boilerplate model and re-flag stored signals in place (PRD v3 §4.1).",
+  )
+  .option("--min-issuers <n>", "shingle must appear under >= n distinct tickers", "3")
+  .option("--no-rebuild-corpus", "reuse the stored shingle model")
+  .action(async (opts) => {
+    await withApp(async ({ db }) => {
+      const { reclassifySignals } = await import("./pipeline/reclassify.ts");
+      const result = await reclassifySignals(
+        db,
+        {
+          rebuildCorpus: opts.rebuildCorpus !== false,
+          minIssuers: Number(opts.minIssuers) || 3,
+        },
+        (msg) => console.error(`  ${msg}`),
+      );
+      const pct = result.scanned ? ((100 * result.flagged) / result.scanned).toFixed(1) : "0.0";
+      console.log(
+        `Scanned ${result.scanned} signal(s): ${result.flagged} flagged as boilerplate (${pct}%), ${result.cleared} kept.`,
+      );
+      console.log(`Corpus model: ${result.corpusShingles} shingle(s).`);
+      for (const [reason, n] of Object.entries(result.byReason).sort((a, b) => b[1] - a[1])) {
+        console.log(`  ${String(n).padStart(6)}  ${reason}`);
       }
     });
   });

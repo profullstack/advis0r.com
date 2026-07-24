@@ -57,7 +57,17 @@ CREATE TABLE IF NOT EXISTS documents (
   checksum      TEXT,
   fetched_at    TEXT,
   meta_json     TEXT,
-  created_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL,
+  -- PRD v3: multi-source provenance (news, wire, audio, video).
+  publisher     TEXT,
+  source_tier   INTEGER,          -- 0 primary .. 3 excluded/adverse
+  paywalled     INTEGER DEFAULT 0,-- 1 = headline/snippet only
+  media_url     TEXT,
+  media_type    TEXT,             -- audio|video|article|filing
+  duration_ms   INTEGER,
+  provenance    TEXT,             -- filing|published|captions|asr
+  asr_model     TEXT,
+  asr_version   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transcripts (
@@ -98,6 +108,32 @@ CREATE TABLE IF NOT EXISTS speakers (
   company_id    TEXT REFERENCES companies(id)
 );
 
+-- Corpus-derived boilerplate language (PRD v3 §4.1c). Word shingles that appear
+-- under many distinct issuers are standard filing text, not company claims.
+CREATE TABLE IF NOT EXISTS boilerplate_shingles (
+  shingle       TEXT PRIMARY KEY,
+  issuer_count  INTEGER NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+-- Cross-source corroboration (PRD v3 §3.4). Links a claim made in one document
+-- to independent confirmation (or contradiction) in another.
+CREATE TABLE IF NOT EXISTS corroborations (
+  id                    TEXT PRIMARY KEY,
+  ticker                TEXT NOT NULL,
+  claim_signal_id       TEXT,
+  claim_source_url      TEXT,
+  corroborating_doc_id  TEXT,
+  corroborating_url     TEXT,
+  publisher             TEXT,
+  source_tier           INTEGER NOT NULL,
+  lag_days              INTEGER,
+  relation              TEXT NOT NULL, -- confirms|contradicts|amplifies_only
+  overlap               REAL,
+  confidence            REAL,
+  created_at            TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS quotes (
   id            TEXT PRIMARY KEY,
   segment_id    TEXT REFERENCES transcript_segments(id),
@@ -125,7 +161,14 @@ CREATE TABLE IF NOT EXISTS signals (
   context_after TEXT,
   source_url    TEXT,
   evidence_hash TEXT,
-  created_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL,
+  -- PRD v3: quality + provenance carried through from the source document.
+  source_tier        INTEGER,
+  is_boilerplate     INTEGER DEFAULT 0,
+  boilerplate_reasons TEXT,
+  speaker_confidence REAL,
+  start_ms           INTEGER,
+  provenance         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS contradictions (
@@ -319,6 +362,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 -- Helpful indexes
 CREATE INDEX IF NOT EXISTS idx_signals_ticker ON signals(ticker);
+CREATE INDEX IF NOT EXISTS idx_corrob_ticker ON corroborations(ticker, relation);
+CREATE INDEX IF NOT EXISTS idx_documents_publisher ON documents(publisher);
+CREATE INDEX IF NOT EXISTS idx_riskflags_ticker ON risk_flags(ticker, flag);
 CREATE INDEX IF NOT EXISTS idx_bars_ticker_tf ON market_bars(ticker, timeframe, ts);
 CREATE INDEX IF NOT EXISTS idx_analyses_ticker ON analyses(ticker, as_of);
 CREATE INDEX IF NOT EXISTS idx_segments_transcript ON transcript_segments(transcript_id, seg_index);

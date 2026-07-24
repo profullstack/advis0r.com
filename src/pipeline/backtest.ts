@@ -130,7 +130,8 @@ async function rankBySignalScore(
   for (const ticker of tickers) {
     const rs = await db.execute({
       sql: `SELECT direction, strength, specificity FROM signals
-            WHERE ticker = ? AND event_date <= ?`,
+            WHERE ticker = ? AND event_date <= ?
+              AND COALESCE(is_boilerplate, 0) = 0`,
       args: [ticker, asOfDay],
     });
     let score = 0;

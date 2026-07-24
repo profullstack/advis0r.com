@@ -17,7 +17,13 @@ export interface ScoreWeights {
   contradictoryEvidence: number;
 }
 
-export const STRATEGY_VERSION = "v0.1.0";
+/**
+ * v0.2.0 (PRD v3): `independentConfirmation` is now fed by a tier-weighted count
+ * of distinct narrative issuers instead of a count of URL hosts that included
+ * the deterministic market/fundamental feeds. The weights below are unchanged,
+ * but the input semantics are — which is a new strategy version by PRD §18.3.
+ */
+export const STRATEGY_VERSION = "v0.2.0";
 
 export const DEFAULT_WEIGHTS: ScoreWeights = {
   transcriptCatalyst: 0.2,

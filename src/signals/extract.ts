@@ -1,16 +1,23 @@
 /**
- * Deterministic transcript signal extraction (PRD §10).
+ * Deterministic transcript signal extraction (PRD §10, extended by PRD v3 §4.1).
  *
  * Rule-based, reproducible extraction of the §10.1/§10.2 signal taxonomy from
  * normalized transcript text. Deterministic by design: the same input always
  * yields the same signals, independent of any LLM. The LLM later interprets
  * these signals but does not create the ground-truth extraction.
+ *
+ * v3 adds section awareness. Extraction now runs a small state machine over the
+ * sentence stream so a safe-harbor / risk-factor heading suppresses the
+ * sentences that follow it, and it carries speaker, media offset and source
+ * tier through to each signal.
  */
 import { createHash } from "node:crypto";
 import type {
   NormalizedTranscript,
+  SourceTier,
   TranscriptSignal,
 } from "../types.ts";
+import { DISCLAIMER_RUN_LENGTH, classifySentence } from "./boilerplate.ts";
 
 type Dir = "positive" | "negative" | "mixed" | "neutral";
 interface Rule {
@@ -53,19 +60,65 @@ const RULES: Rule[] = [
 
 const NUMERIC = /(\$\s?\d[\d,.]*\s?(?:million|billion|thousand|m|b|k)?|\b\d+(?:\.\d+)?\s?%|\b\d{2,}\b)/i;
 
-export function extractSignals(t: NormalizedTranscript): TranscriptSignal[] {
+export interface ExtractOptions {
+  /** Corpus-level repeated-language test (see `corpus.ts`). */
+  isRepeatedAcrossIssuers?: (sentence: string) => boolean;
+  /** Reputation tier of the source document (PRD v3 §3.3). */
+  sourceTier?: SourceTier;
+  /**
+   * Retain boilerplate signals, flagged rather than dropped. Off by default;
+   * useful for auditing what the filter removed.
+   */
+  keepBoilerplate?: boolean;
+}
+
+/** One sentence plus the segment it came from (speaker / media offset). */
+interface SourceSentence {
+  text: string;
+  speaker?: string;
+  speakerTitle?: string;
+  startMs?: number;
+}
+
+export function extractSignals(
+  t: NormalizedTranscript,
+  opts: ExtractOptions = {},
+): TranscriptSignal[] {
   const ticker = t.primaryTicker ?? t.tickers[0];
   if (!ticker) return [];
-  const speaker = t.segments.find((s) => s.speaker)?.speaker ?? "Company";
   const eventType = t.eventType;
   const eventDate = t.eventDate.slice(0, 10);
+  const sourceTier = opts.sourceTier ?? 0;
 
-  const sentences = splitSentences(t.segments.map((s) => s.text).join(" "));
+  // Preserve the segment each sentence came from so speaker attribution and
+  // media offsets survive extraction. Previously all text was flattened into
+  // one string, which is why every stored signal was attributed to "Company".
+  const sentences = flattenToSentences(t);
+
   const out: TranscriptSignal[] = [];
   const seen = new Set<string>();
+  let disclaimerRun = 0;
 
   for (let i = 0; i < sentences.length; i++) {
-    const sentence = sentences[i]!;
+    const current = sentences[i]!;
+    const sentence = current.text;
+    const contextBefore = sentences[i - 1]?.text ?? "";
+    const contextAfter = sentences[i + 1]?.text ?? "";
+
+    const verdict = classifySentence({
+      sentence,
+      contextBefore,
+      contextAfter,
+      inDisclaimerSection: disclaimerRun > 0,
+      isRepeatedAcrossIssuers: opts.isRepeatedAcrossIssuers,
+    });
+
+    // A disclaimer heading suppresses the run of sentences that follows it.
+    if (verdict.opensDisclaimerSection) disclaimerRun = DISCLAIMER_RUN_LENGTH;
+    else if (disclaimerRun > 0) disclaimerRun--;
+
+    if (verdict.isBoilerplate && !opts.keepBoilerplate) continue;
+
     for (const rule of RULES) {
       if (!rule.patterns.some((p) => p.test(sentence))) continue;
       const hasNumber = NUMERIC.test(sentence);
@@ -81,7 +134,8 @@ export function extractSignals(t: NormalizedTranscript): TranscriptSignal[] {
       out.push({
         id: `${ticker}:${eventDate}:${rule.signalType}:${evidenceHash.slice(0, 8)}`,
         ticker,
-        speaker,
+        speaker: current.speaker ?? "Company",
+        speakerTitle: current.speakerTitle,
         eventDate,
         eventType,
         signalType: rule.signalType,
@@ -90,10 +144,32 @@ export function extractSignals(t: NormalizedTranscript): TranscriptSignal[] {
         novelty: 0.5, // refined by language-change detection across periods
         specificity,
         quote,
-        contextBefore: (sentences[i - 1] ?? "").trim().slice(0, 200),
-        contextAfter: (sentences[i + 1] ?? "").trim().slice(0, 200),
+        contextBefore: contextBefore.trim().slice(0, 200),
+        contextAfter: contextAfter.trim().slice(0, 200),
         sourceUrl: t.url,
         evidenceHash,
+        sourceTier,
+        isBoilerplate: verdict.isBoilerplate,
+        boilerplateReasons: verdict.reasons.length ? verdict.reasons : undefined,
+        speakerConfidence: current.speaker ? 1 : 0,
+        startMs: current.startMs,
+        provenance: t.provenance ?? "filing",
+      });
+    }
+  }
+  return out;
+}
+
+/** Split every segment into sentences while keeping its speaker/offset. */
+function flattenToSentences(t: NormalizedTranscript): SourceSentence[] {
+  const out: SourceSentence[] = [];
+  for (const segment of t.segments) {
+    for (const text of splitSentences(segment.text)) {
+      out.push({
+        text,
+        speaker: segment.speaker,
+        speakerTitle: segment.speakerTitle,
+        startMs: segment.startMs,
       });
     }
   }
