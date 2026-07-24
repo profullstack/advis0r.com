@@ -70,6 +70,13 @@ export interface ExtractOptions {
    * useful for auditing what the filter removed.
    */
   keepBoilerplate?: boolean;
+  /**
+   * Sentence-level subject guard for multi-company documents (see
+   * `subject.ts`). When provided, a sentence that does not name the subject
+   * company yields no signals — a comparison article must not attribute one
+   * company's figures to another (PRD §8.4).
+   */
+  mentionsSubject?: (sentence: string) => boolean;
 }
 
 /** One sentence plus the segment it came from (speaker / media offset). */
@@ -118,6 +125,10 @@ export function extractSignals(
     else if (disclaimerRun > 0) disclaimerRun--;
 
     if (verdict.isBoilerplate && !opts.keepBoilerplate) continue;
+
+    // In a document covering several companies, only sentences naming the
+    // subject may be attributed to it.
+    if (opts.mentionsSubject && !opts.mentionsSubject(sentence)) continue;
 
     for (const rule of RULES) {
       if (!rule.patterns.some((p) => p.test(sentence))) continue;

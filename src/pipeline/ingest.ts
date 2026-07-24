@@ -12,6 +12,12 @@ import type { AppConfig } from "../config.ts";
 import type { BaseTranscriptProvider } from "../providers/transcripts/base.ts";
 import { extractSignals } from "../signals/extract.ts";
 import { loadBoilerplateShingles, makeRepeatTest } from "../signals/corpus.ts";
+import {
+  isMultiCompany,
+  loadTickerVocabulary,
+  makeSubjectMentionTest,
+  subjectTerms,
+} from "../signals/subject.ts";
 import type { SourceTier, TranscriptQuery } from "../types.ts";
 
 export interface IngestResult {
@@ -20,6 +26,8 @@ export interface IngestResult {
   signals: number;
   /** Signals discarded as filing boilerplate (PRD v3 §4.1). */
   boilerplateSuppressed: number;
+  /** Documents that covered several companies and got the subject guard. */
+  multiCompanyGuarded: number;
   errors: string[];
 }
 
@@ -41,6 +49,7 @@ export async function ingest(
     segments: 0,
     signals: 0,
     boilerplateSuppressed: 0,
+    multiCompanyGuarded: 0,
     errors: [],
   };
   const now = new Date().toISOString();
@@ -52,6 +61,14 @@ export async function ingest(
   if (shingleSet.size) {
     onProgress?.(`boilerplate model: ${shingleSet.size} shingle(s) loaded`);
   }
+
+  // Vocabulary for detecting when a document covers more than one company.
+  // The SEC list is authoritative; indexed tickers are unioned in so the guard
+  // still works offline with a cold cache.
+  const knownTickers = new Set([
+    ...(await loadTickerVocabulary()),
+    ...(await loadKnownTickers(db)),
+  ]);
 
   for (const provider of providers) {
     let docs;
@@ -80,12 +97,26 @@ export async function ingest(
         const segs = normalized.segments.filter((s) => s.text.trim().length > 0);
         const sourceTier = (doc.sourceTier ?? 0) as SourceTier;
 
+        // A document covering several companies (e.g. "IONQ or QBTS: which
+        // should you buy?") must not lend one company's figures to the other,
+        // so sentences there have to name the subject (PRD §8.4).
+        const fullText = segs.map((s) => s.text).join(" ");
+        const multiCompany =
+          ticker.length > 0 && isMultiCompany(fullText, ticker, knownTickers);
+        if (multiCompany) result.multiCompanyGuarded += 1;
+        const mentionsSubject = multiCompany
+          ? makeSubjectMentionTest(
+              subjectTerms(ticker, (doc.meta?.companyName as string | undefined) ?? undefined),
+            )
+          : undefined;
+
         // Extract once with everything flagged, then partition — this keeps the
         // suppression count honest without paying for a second pass.
         const all = extractSignals(normalized, {
           isRepeatedAcrossIssuers,
           sourceTier,
           keepBoilerplate: true,
+          mentionsSubject,
         });
         const signals = opts.keepBoilerplate ? all : all.filter((s) => !s.isBoilerplate);
         result.boilerplateSuppressed += all.length - signals.length;
@@ -163,4 +194,17 @@ export async function ingest(
     }
   }
   return result;
+}
+
+/** Tickers already known to the index — vocabulary for multi-company detection. */
+async function loadKnownTickers(db: Client): Promise<Set<string>> {
+  try {
+    const rs = await db.execute(
+      `SELECT DISTINCT primary_ticker AS t FROM transcripts WHERE primary_ticker IS NOT NULL
+       UNION SELECT DISTINCT ticker AS t FROM signals WHERE ticker IS NOT NULL`,
+    );
+    return new Set(rs.rows.map((r) => String(r.t).toUpperCase()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
 }

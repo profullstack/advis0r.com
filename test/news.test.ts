@@ -22,6 +22,11 @@ import {
   parseRobots,
 } from "../src/providers/news/article.ts";
 import { mentionsTicker } from "../src/providers/news/index.ts";
+import {
+  isMultiCompany,
+  makeSubjectMentionTest,
+  subjectTerms,
+} from "../src/signals/subject.ts";
 import { TIER_WEIGHTS, weightedIssuerCount } from "../src/evidence/builder.ts";
 
 describe("source tiering", () => {
@@ -247,5 +252,45 @@ describe("wire headline matching", () => {
 
   test("does not match unrelated headlines", () => {
     expect(mentionsTicker("Acme announces layoffs", "VST", "Vistra Corp.")).toBe(false);
+  });
+});
+
+describe("multi-company subject guard (PRD §8.4)", () => {
+  const known = new Set(["QBTS", "IONQ", "RGTI", "VST"]);
+
+  test("a comparison article is detected as multi-company", () => {
+    const text =
+      "IONQ or QBTS: Which Quantum Stock Should You Buy Ahead of Q2 Earnings? Both names have run hard.";
+    expect(isMultiCompany(text, "QBTS", known)).toBe(true);
+  });
+
+  test("a single-company article is not", () => {
+    const text = "QBTS reported record bookings and raised full-year guidance this morning.";
+    expect(isMultiCompany(text, "QBTS", known)).toBe(false);
+  });
+
+  test("common acronyms do not make a document look multi-company", () => {
+    const text = "QBTS discussed its AI and GPU roadmap with the CEO and CFO, citing RPO and EBITDA.";
+    expect(isMultiCompany(text, "QBTS", known)).toBe(false);
+  });
+
+  test("the guard blocks a rival's figures from being attributed to the subject", () => {
+    // The exact production defect: IonQ's $470M RPO recorded as a QBTS signal.
+    const mentions = makeSubjectMentionTest(subjectTerms("QBTS", "D-Wave Quantum Inc."));
+    expect(
+      mentions("IonQ also remains fundamentally strong, supported by a $470 million RPO."),
+    ).toBe(false);
+    expect(mentions("D-Wave reported remaining performance obligations of $42.4 million.")).toBe(true);
+    expect(mentions("QBTS shares rose after the announcement.")).toBe(true);
+  });
+
+  test("subject terms include ticker, cleaned name and brand token", () => {
+    const terms = subjectTerms("VST", "Vistra Corp.");
+    expect(terms).toContain("VST");
+    expect(terms.some((t) => t.toLowerCase().includes("vistra"))).toBe(true);
+  });
+
+  test("an empty term list never blocks (fails open, not silently empty)", () => {
+    expect(makeSubjectMentionTest([])("anything")).toBe(true);
   });
 });
