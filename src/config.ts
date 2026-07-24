@@ -85,6 +85,10 @@ export interface AppConfig {
     alpacaKeyId: string;
     alpacaSecretKey: string;
     secUserAgent: string;
+    /** ValueSERP news discovery (PRD v3 §3.1). Optional; RSS works without it. */
+    valueSerpApiKey: string;
+    /** Groq API key for Whisper ASR of audio/video sources (PRD v3 §2.2). */
+    groqApiKey: string;
   };
 }
 
@@ -158,6 +162,8 @@ const defaults: AppConfig = {
     alpacaKeyId: "",
     alpacaSecretKey: "",
     secUserAgent: "transcript-search research",
+    valueSerpApiKey: "",
+    groqApiKey: "",
   },
 };
 
@@ -201,6 +207,8 @@ function applyEnv(c: AppConfig): AppConfig {
     alpacaKeyId: env.APCA_API_KEY_ID ?? "",
     alpacaSecretKey: env.APCA_API_SECRET_KEY ?? "",
     secUserAgent: env.SEC_USER_AGENT ?? c.secrets.secUserAgent,
+    valueSerpApiKey: env.VALUESERP_API_KEY ?? "",
+    groqApiKey: env.GROQ_API_KEY ?? "",
   };
   c.databaseUrl = expandHome(c.databaseUrl);
   return c;

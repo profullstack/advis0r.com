@@ -23,7 +23,28 @@ export type EventType =
   | "sec_exhibit"
   | "blog_post"
   | "video"
+  | "news_article"
+  | "press_release"
+  | "conference_talk"
   | "other";
+
+/**
+ * Source reputation tier (PRD v3 §3.3). Determines evidentiary weight and
+ * whether a document may source facts at all.
+ *
+ *  0 — Primary: SEC, company IR, company-owned channels, newswires.
+ *  1 — Reputable press: AP, Reuters, Bloomberg, WSJ, FT, CNBC, MarketWatch…
+ *  2 — Analysis/opinion: Motley Fool, Seeking Alpha, Benzinga… context only.
+ *  3 — Excluded/adverse: aggregators, paid-IR and stock-promotion outlets.
+ */
+export type SourceTier = 0 | 1 | 2 | 3;
+
+/** How a transcript's text was produced — provenance for grounding (PRD §8.4). */
+export type TextProvenance =
+  | "filing" // verbatim from an SEC document
+  | "published" // verbatim published text (article, press release)
+  | "captions" // platform-provided captions (e.g. YouTube)
+  | "asr"; // machine-transcribed audio — derived, may contain errors
 
 export interface TranscriptQuery {
   topic: string;
@@ -42,6 +63,16 @@ export interface SourceDocument {
   eventType: EventType;
   publishedAt?: string;
   tickers: string[];
+  /** Publisher / outlet name, when the source is news or a wire release. */
+  publisher?: string;
+  /** Reputation tier (PRD v3 §3.3). Defaults to 0 for SEC/primary sources. */
+  sourceTier?: SourceTier;
+  /** True when only a headline/snippet is available (publisher blocked us). */
+  paywalled?: boolean;
+  /** Direct media URL for audio/video sources. */
+  mediaUrl?: string;
+  mediaType?: "audio" | "video" | "article" | "filing";
+  durationMs?: number;
   /** Free-form provider metadata preserved for audit/reproducibility. */
   meta?: Record<string, unknown>;
 }
@@ -64,6 +95,11 @@ export interface TranscriptSegment {
 
 export interface ParsedTranscript extends DownloadedDocument {
   segments: TranscriptSegment[];
+  /** How the text was produced. Defaults to "filing" for SEC documents. */
+  provenance?: TextProvenance;
+  /** ASR model identity, when `provenance === "asr"` (PRD §8.4 grounding). */
+  asrModel?: string;
+  asrVersion?: string;
 }
 
 export interface NormalizedTranscript extends ParsedTranscript {
@@ -93,6 +129,18 @@ export interface TranscriptSignal {
   contextAfter: string;
   sourceUrl: string;
   evidenceHash: string;
+  /** Reputation tier of the document this signal came from (PRD v3 §3.3). */
+  sourceTier?: SourceTier;
+  /** True when the sentence is filing boilerplate rather than a claim. */
+  isBoilerplate?: boolean;
+  /** Why it was flagged — kept for auditability rather than silently dropping. */
+  boilerplateReasons?: string[];
+  /** 1 = attributed to a named speaker; lower when inferred or unknown. */
+  speakerConfidence?: number;
+  /** Offset into the source media, enabling play-at-timestamp evidence links. */
+  startMs?: number;
+  /** How the underlying text was produced (ASR text is derived, not verbatim). */
+  provenance?: TextProvenance;
 }
 
 export interface Contradiction {

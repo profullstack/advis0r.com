@@ -94,7 +94,8 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
 
   const sigRs = await db.execute({
     sql: `SELECT signal_type, direction, strength, specificity, quote, event_date, source_url
-          FROM signals WHERE ticker = ? ORDER BY event_date DESC LIMIT 60`,
+          FROM signals WHERE ticker = ? AND COALESCE(is_boilerplate, 0) = 0
+          ORDER BY event_date DESC LIMIT 60`,
     args: [sym],
   });
 
@@ -258,7 +259,8 @@ async function candidateTickers(topic: string | null, limit: number): Promise<st
       if (t.length) return t;
     }
     const rs = await db.execute({
-      sql: `SELECT ticker, COUNT(*) n FROM signals GROUP BY ticker ORDER BY n DESC LIMIT ?`,
+      sql: `SELECT ticker, COUNT(*) n FROM signals WHERE COALESCE(is_boilerplate, 0) = 0
+            GROUP BY ticker ORDER BY n DESC LIMIT ?`,
       args: [limit],
     });
     return rs.rows.map((r) => String(r.ticker)).filter(Boolean);
@@ -307,6 +309,17 @@ const server = Bun.serve({
           const rs = await db.execute(`SELECT COUNT(*) AS n FROM ${t}`);
           out[t] = Number(rs.rows[0]?.n ?? 0);
         }
+        // Report the usable corpus alongside the raw count: `signals` includes
+        // rows flagged as filing boilerplate, which nothing downstream reads.
+        const kept = await db.execute(
+          "SELECT COUNT(*) AS n FROM signals WHERE COALESCE(is_boilerplate, 0) = 0",
+        );
+        out.signals_usable = Number(kept.rows[0]?.n ?? 0);
+        out.signals_boilerplate = (out.signals ?? 0) - out.signals_usable;
+        const news = await db.execute(
+          "SELECT COUNT(*) AS n FROM documents WHERE COALESCE(source_tier, 0) > 0",
+        );
+        out.news_documents = Number(news.rows[0]?.n ?? 0);
         return json(out);
       }
 
@@ -316,7 +329,8 @@ const server = Bun.serve({
 
       if (p === "/api/tickers") {
         const rs = await db.execute(
-          `SELECT ticker, COUNT(*) n FROM signals GROUP BY ticker ORDER BY n DESC`,
+          `SELECT ticker, COUNT(*) n FROM signals WHERE COALESCE(is_boilerplate, 0) = 0
+            GROUP BY ticker ORDER BY n DESC`,
         );
         return json({ tickers: rs.rows });
       }
@@ -409,7 +423,9 @@ const server = Bun.serve({
         if (!ticker) return json({ error: "missing ?ticker=" }, 400);
         const rs = await db.execute({
           sql: `SELECT ticker, signal_type, direction, strength, specificity, quote,
-                       event_date, source_url FROM signals WHERE ticker = ?
+                       event_date, source_url, source_tier, speaker, speaker_title,
+                       provenance, start_ms
+                FROM signals WHERE ticker = ? AND COALESCE(is_boilerplate, 0) = 0
                 ORDER BY event_date DESC LIMIT 200`,
           args: [ticker.toUpperCase()],
         });

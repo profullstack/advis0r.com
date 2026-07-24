@@ -11,6 +11,7 @@ import { OpenAIProvider } from "./providers/openai.ts";
 import { AnthropicProvider } from "./providers/anthropic.ts";
 import { OfflineAnalysisProvider } from "./providers/offline.ts";
 import { buildTranscriptProviders } from "./providers/transcripts/index.ts";
+import { NewsProvider } from "./providers/news/index.ts";
 import type { AnalysisProvider } from "./providers/interfaces.ts";
 
 export function buildRegistry(config: AppConfig) {
@@ -31,11 +32,20 @@ export function buildRegistry(config: AppConfig) {
       )
     : yahoo;
 
+  // News is registered separately from `transcripts` rather than folded into
+  // it: it requires tickers to be meaningful and can spend metered search
+  // credits, so it runs only when explicitly asked for (`transcripts news`).
+  const news = new NewsProvider({
+    downloadsDir: config.downloadsDir,
+    valueSerpKey: config.secrets.valueSerpApiKey,
+  });
+
   return {
     alpaca: market,
     marketSource: hasAlpaca ? "alpaca (yahoo fallback)" : "yahoo",
     fundamentals: new SecFundamentalsProvider(config),
     transcripts: buildTranscriptProviders(config),
+    news,
     ai,
   };
 }

@@ -16,6 +16,7 @@ import { applyFilters, type ScreenCriteria, type Candidate } from "../screen/fil
 import { STRATEGY_VERSION } from "../scoring/weights.ts";
 import type {
   BarsRequest,
+  EvidenceItem,
   IndicatorConfig,
   RankedCandidate,
 } from "../types.ts";
@@ -187,7 +188,15 @@ export async function analyzeTicker(
   };
 
   if (opts.persist) {
-    await persistAnalysis(db, ticker, opts, result, composite.overall, composite.confidence);
+    await persistAnalysis(
+      db,
+      ticker,
+      opts,
+      result,
+      composite.overall,
+      composite.confidence,
+      evidence.items,
+    );
   }
 
   return { ticker, filtered: false, filterReasons: [], candidate: ranked };
@@ -200,30 +209,57 @@ async function persistAnalysis(
   result: Awaited<ReturnType<ReturnType<typeof getAiProvider>["analyze"]>>,
   overall: number,
   confidence: number,
+  evidence: EvidenceItem[] = [],
 ): Promise<void> {
   const id = `${ticker}:${opts.asOf}:${result.inputHash.slice(0, 8)}`;
-  await db.execute({
-    sql: `INSERT OR REPLACE INTO analyses
-      (id, strategy_version, ticker, topic, as_of, horizon_quarters, provider, model,
-       prompt_hash, input_hash, output_json, overall_score, confidence, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    args: [
-      id,
-      STRATEGY_VERSION,
-      ticker,
-      opts.topic,
-      opts.asOf,
-      opts.horizonQuarters,
-      result.provider,
-      result.model,
-      result.promptHash,
-      result.inputHash,
-      JSON.stringify(result.analysis),
-      overall,
-      confidence,
-      new Date().toISOString(),
-    ],
-  });
+  const now = new Date().toISOString();
+
+  // The analysis row and the evidence it cited are written together: an
+  // analysis whose citations cannot be reproduced does not satisfy the
+  // grounding/reproducibility invariants (PRD §8.4, §26, §29.14).
+  const statements = [
+    {
+      sql: `INSERT OR REPLACE INTO analyses
+        (id, strategy_version, ticker, topic, as_of, horizon_quarters, provider, model,
+         prompt_hash, input_hash, output_json, overall_score, confidence, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [
+        id,
+        STRATEGY_VERSION,
+        ticker,
+        opts.topic,
+        opts.asOf,
+        opts.horizonQuarters,
+        result.provider,
+        result.model,
+        result.promptHash,
+        result.inputHash,
+        JSON.stringify(result.analysis),
+        overall,
+        confidence,
+        now,
+      ],
+    },
+    // Replace prior evidence for this analysis id so re-running is idempotent.
+    { sql: "DELETE FROM analysis_evidence WHERE analysis_id = ?", args: [id] },
+    ...evidence.map((item) => ({
+      sql: `INSERT OR REPLACE INTO analysis_evidence
+        (id, analysis_id, evidence_id, kind, ticker, source_url, text, hash, observed_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+      args: [
+        `${id}:${item.hash}`,
+        id,
+        item.id,
+        item.kind,
+        item.ticker,
+        item.sourceUrl ?? null,
+        item.text,
+        item.hash,
+        item.observedAt,
+      ],
+    })),
+  ];
+  await db.batch(statements, "write");
 }
 
 function spread(snapshot?: { latestQuote?: { bidPrice: number; askPrice: number } }): number | undefined {

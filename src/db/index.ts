@@ -23,11 +23,69 @@ export function getDb(config: AppConfig): Client {
   return client;
 }
 
-/** Apply the schema. Safe to run repeatedly (all statements are IF NOT EXISTS). */
+/**
+ * Columns added after the initial schema shipped (PRD v3). `CREATE TABLE IF NOT
+ * EXISTS` is a no-op on databases that already have the table, so existing
+ * deployments need explicit `ALTER TABLE ... ADD COLUMN` to gain new columns.
+ */
+const ADDED_COLUMNS: Record<string, Record<string, string>> = {
+  documents: {
+    publisher: "TEXT",
+    source_tier: "INTEGER",
+    paywalled: "INTEGER DEFAULT 0",
+    media_url: "TEXT",
+    media_type: "TEXT",
+    duration_ms: "INTEGER",
+    provenance: "TEXT",
+    asr_model: "TEXT",
+    asr_version: "TEXT",
+  },
+  signals: {
+    source_tier: "INTEGER",
+    is_boilerplate: "INTEGER DEFAULT 0",
+    boilerplate_reasons: "TEXT",
+    speaker_confidence: "REAL",
+    start_ms: "INTEGER",
+    provenance: "TEXT",
+  },
+};
+
+/**
+ * Apply the schema. Safe to run repeatedly.
+ *
+ * Order matters: tables first, then additive column migrations, then indexes —
+ * an index may reference a column that only exists after the ALTER pass.
+ */
 export async function migrate(db: Client): Promise<void> {
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
   const statements = splitSqlStatements(schema);
-  await db.batch(statements, "write");
+  const indexes = statements.filter((s) => /^CREATE\s+INDEX/i.test(s));
+  const rest = statements.filter((s) => !/^CREATE\s+INDEX/i.test(s));
+
+  await db.batch(rest, "write");
+  await ensureColumns(db);
+  if (indexes.length) await db.batch(indexes, "write");
+}
+
+/** Idempotently add any missing columns listed in ADDED_COLUMNS. */
+export async function ensureColumns(db: Client): Promise<string[]> {
+  const applied: string[] = [];
+  for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+    let existing: Set<string>;
+    try {
+      const info = await db.execute(`PRAGMA table_info(${table})`);
+      existing = new Set(info.rows.map((r) => String(r.name)));
+    } catch {
+      continue; // table does not exist yet; the CREATE pass will handle it
+    }
+    if (existing.size === 0) continue;
+    for (const [column, type] of Object.entries(columns)) {
+      if (existing.has(column)) continue;
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      applied.push(`${table}.${column}`);
+    }
+  }
+  return applied;
 }
 
 /**

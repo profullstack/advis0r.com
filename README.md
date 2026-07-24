@@ -60,6 +60,34 @@ What is **fully implemented**:
 - Ranked watchlist rendering in **terminal / Markdown / JSON** with the
   mandatory disclaimer.
 
+### Multi-source ingestion (PRD v3)
+
+Beyond SEC filings, the index now ingests:
+
+- **News** — `transcripts news <TICKERS...>`. Keyless discovery (Yahoo per-ticker
+  RSS, Google News RSS, newswire feeds) plus optional ValueSERP search; article
+  bodies are fetched and parsed by us, never taken from a vendor summary. Every
+  document carries a **reputation tier** (0 primary / 1 reputable press /
+  2 analysis / 3 excluded) that decides its evidentiary weight. `robots.txt` is
+  honoured and publishers that block automated access degrade to
+  headline + snippet rather than being routed around.
+- **Media** — `transcripts media <TICKERS...>`. Earnings calls, keynotes,
+  conference talks and podcasts via YouTube captions (free, already timestamped)
+  with Groq `whisper-large-v3-turbo` ASR (~$0.04/hr) as the fallback. Segments
+  keep millisecond offsets, so a quote can link to the exact second it was said.
+  Needs `GROQ_API_KEY` for ASR and, on a datacenter host, `YTDLP_COOKIES` for
+  YouTube.
+- **Corroboration** — `transcripts corroborate [TICKERS...]`. Links a primary
+  claim to independent confirmation in other sources, weighted by tier and
+  recency, and raises a `promotional_coverage` risk flag when a burst of
+  promo-tier coverage has no primary or reputable confirmation.
+- **Signal quality** — `transcripts reclassify`. Deterministic boilerplate model
+  (disclaimer sections, hypothetical framing, and language repeated across
+  issuers). Applied to the production corpus it flagged **43.8% of stored
+  signals** as filing boilerplate rather than executive claims.
+
+See [`docs/PRD-v3-media-news.md`](docs/PRD-v3-media-news.md).
+
 What is **partial / Phase 2**: the point-in-time backtest engine is implemented
 and ranks candidates deterministically (`transcripts backtest`); realized-return
 metrics need Alpaca historical bars (set `APCA_*`). YouTube caption import is the
