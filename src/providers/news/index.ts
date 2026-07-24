@@ -147,6 +147,9 @@ export class NewsProvider extends BaseTranscriptProvider {
         host: hit.host,
         snippet: hit.snippet,
         promotional: isPromotionalHost(hit.url),
+        // Carried so the ingest subject guard can recognise the company by
+        // name as well as by ticker in multi-company articles.
+        companyName: this.companyNames.get(ticker),
       },
     };
   }

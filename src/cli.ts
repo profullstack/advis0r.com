@@ -382,6 +382,11 @@ program
         `Scanned ${result.scanned} signal(s): ${result.flagged} flagged as boilerplate (${pct}%), ${result.cleared} kept.`,
       );
       console.log(`Corpus model: ${result.corpusShingles} shingle(s).`);
+      if (result.misattributed) {
+        console.log(
+          `Removed ${result.misattributed} misattributed signal(s) from multi-company documents (PRD §8.4).`,
+        );
+      }
       for (const [reason, n] of Object.entries(result.byReason).sort((a, b) => b[1] - a[1])) {
         console.log(`  ${String(n).padStart(6)}  ${reason}`);
       }
