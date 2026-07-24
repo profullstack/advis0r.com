@@ -73,10 +73,15 @@ Beyond SEC filings, the index now ingests:
   headline + snippet rather than being routed around.
 - **Media** — `transcripts media <TICKERS...>`. Earnings calls, keynotes,
   conference talks and podcasts via YouTube captions (free, already timestamped)
-  with Groq `whisper-large-v3-turbo` ASR (~$0.04/hr) as the fallback. Segments
-  keep millisecond offsets, so a quote can link to the exact second it was said.
-  Needs `GROQ_API_KEY` for ASR and, on a datacenter host, `YTDLP_COOKIES` for
-  YouTube.
+  with ASR as the fallback. Segments keep millisecond offsets, so a quote can
+  link to the exact second it was said.
+
+  ASR is provider-neutral and picks the best available credential:
+  **ElevenLabs Scribe** (`ELEVENLABS_API_KEY`, preferred — word-level
+  timestamps *and* speaker diarization), Groq `whisper-large-v3-turbo`
+  (`GROQ_API_KEY`, cheapest), or OpenAI `whisper-1` (`OPENAI_API_KEY`).
+  Anthropic has no speech-to-text endpoint, so transcription is always a
+  third-party call. On a datacenter host YouTube also needs `YTDLP_COOKIES`.
 - **Corroboration** — `transcripts corroborate [TICKERS...]`. Links a primary
   claim to independent confirmation in other sources, weighted by tier and
   recency, and raises a `promotional_coverage` risk flag when a burst of

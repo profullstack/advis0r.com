@@ -285,7 +285,9 @@ program
 
       const provider = new MediaProvider({
         downloadsDir: config.downloadsDir,
+        elevenLabsApiKey: config.secrets.elevenLabsApiKey,
         groqApiKey: config.secrets.groqApiKey,
+        openaiApiKey: config.secrets.openaiApiKey,
         perTicker: Number(opts.perTicker) || 4,
         allowAsr: opts.asr !== false,
         channels: opts.channels ? String(opts.channels).split(",").map((s) => s.trim()) : undefined,
@@ -293,7 +295,11 @@ program
       provider.setCompanyNames(await loadCompanyNames(db, symbols));
 
       console.error(
-        `Transcript sources: captions (keyless)${provider.asrConfigured && opts.asr !== false ? " + Groq ASR" : " — ASR disabled or GROQ_API_KEY unset"}`,
+        `Transcript sources: captions (keyless)${
+          provider.asrConfigured && opts.asr !== false
+            ? ` + ASR via ${provider.asrBackend}`
+            : " — ASR disabled or no ASR key set (ELEVENLABS_API_KEY / GROQ_API_KEY / OPENAI_API_KEY)"
+        }`,
       );
 
       const result = await ingest(

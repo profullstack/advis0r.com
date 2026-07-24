@@ -28,7 +28,7 @@ import type {
 } from "../../types.ts";
 import { BaseTranscriptProvider } from "../transcripts/base.ts";
 import { attributeSegments } from "../../signals/speakers.ts";
-import { AsrClient, estimateCostUsd } from "./asr.ts";
+import { AsrClient } from "./asr.ts";
 import { parseCaptionsToSegments } from "./captions.ts";
 import { episodeMentions, fetchEpisodes, searchItunes, searchPodcastIndex } from "./podcast.ts";
 import {
@@ -42,7 +42,10 @@ import {
 
 export interface MediaProviderOptions {
   downloadsDir: string;
+  /** Preferred ASR backend — adds speaker diarization (PRD v3 §2.2). */
+  elevenLabsApiKey?: string;
   groqApiKey?: string;
+  openaiApiKey?: string;
   podcastIndexKey?: string;
   podcastIndexSecret?: string;
   /** Max media items per ticker per run — ASR is cheap but not free. */
@@ -69,7 +72,11 @@ export class MediaProvider extends BaseTranscriptProvider {
 
   constructor(private options: MediaProviderOptions) {
     super(options.downloadsDir);
-    this.asr = new AsrClient({ apiKey: options.groqApiKey ?? "" });
+    this.asr = new AsrClient({
+      elevenLabsApiKey: options.elevenLabsApiKey,
+      groqApiKey: options.groqApiKey,
+      openaiApiKey: options.openaiApiKey,
+    });
   }
 
   setCompanyNames(names: Map<string, string>): void {
@@ -78,6 +85,11 @@ export class MediaProvider extends BaseTranscriptProvider {
 
   get asrConfigured(): boolean {
     return this.asr.configured;
+  }
+
+  /** Which ASR backend was selected, or null when none is configured. */
+  get asrBackend(): string | null {
+    return this.asr.backend;
   }
 
   async search(query: TranscriptQuery): Promise<SourceDocument[]> {
@@ -236,7 +248,7 @@ export class MediaProvider extends BaseTranscriptProvider {
             provenance = "asr";
             asrModel = result.model;
             durationMs = result.durationMs;
-            note = `ASR ${result.model}, ~$${estimateCostUsd(result.durationMs)}`;
+            note = `ASR ${this.asr.backend}:${result.model}, ~$${this.asr.estimateCostUsd(result.durationMs)}`;
           }
         } finally {
           await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -244,7 +256,9 @@ export class MediaProvider extends BaseTranscriptProvider {
       }
     } else if (document.mediaType === "audio" && document.mediaUrl) {
       if (this.options.allowAsr === false || !this.asr.configured) {
-        throw new Error("audio source requires GROQ_API_KEY for ASR (PRD v3 §2.2)");
+        throw new Error(
+          "audio source requires an ASR key: ELEVENLABS_API_KEY (preferred), GROQ_API_KEY, or OPENAI_API_KEY (PRD v3 §2.2)",
+        );
       }
       const local = await this.fetchMedia(document.mediaUrl);
       try {
@@ -253,7 +267,7 @@ export class MediaProvider extends BaseTranscriptProvider {
         provenance = "asr";
         asrModel = result.model;
         durationMs = result.durationMs;
-        note = `ASR ${result.model}, ~$${estimateCostUsd(result.durationMs)}`;
+        note = `ASR ${this.asr.backend}:${result.model}, ~$${this.asr.estimateCostUsd(result.durationMs)}`;
       } finally {
         await unlink(local).catch(() => {});
       }

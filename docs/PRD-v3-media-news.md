@@ -344,8 +344,8 @@ Ranked by value per unit of effort.
 | **M1** | Boilerplate suppression + assertive-voice filter + cross-issuer frequency filter; persist `analysis_evidence` | ✅ **shipped, applied to production** |
 | **M2** | News: ValueSERP + Google News RSS + Yahoo per-ticker RSS discovery → tiered fetch/parse → `documents` | ✅ **shipped** |
 | **M3** | Corroboration engine + `promotional_coverage` risk flag + tier-weighted `independentSources` | ✅ **shipped** |
-| **M4** | Media: podcast (iTunes/Podcast Index) + YouTube captions → Groq ASR → timestamped segments | ✅ **shipped** (see §5.1 for the two operational prerequisites) |
-| **M5** | Speaker attribution (regex → DEF 14A roster → diarization) | ◐ regex layer shipped; DEF 14A roster + diarization outstanding |
+| **M4** | Media: podcast (iTunes/Podcast Index) + YouTube captions → ASR → timestamped, diarized segments | ✅ **shipped and verified on real audio** |
+| **M5** | Speaker attribution (regex → DEF 14A roster → diarization) | ◐ regex + **ASR diarization** shipped; DEF 14A roster (resolving `Speaker 1` to a named executive) outstanding |
 | **M6** | Novelty via cross-period language diff; claim→outcome credibility tracking | ☐ not started |
 
 ### 5.1 What M4 needs to run in production
@@ -354,8 +354,9 @@ The media pipeline is implemented and unit-tested end to end, and podcast and
 video **discovery** were verified live. Two prerequisites are environmental, not
 code:
 
-1. **`GROQ_API_KEY` is not set.** Without it the podcast/ASR path cannot run
-   (captions still work). Cost is ~$0.04/hour of audio.
+1. **An ASR key is required** — `ELEVENLABS_API_KEY` (preferred; adds
+   diarization), `GROQ_API_KEY`, or `OPENAI_API_KEY`. Captions work without one.
+   Anthropic cannot fill this role: it has no speech-to-text endpoint.
 2. **YouTube bot-blocks this host.** `yt-dlp` search works, but caption download
    returns *"Sign in to confirm you're not a bot"* — the standard datacenter-IP
    block. Set `YTDLP_COOKIES=/path/to/cookies.txt` or

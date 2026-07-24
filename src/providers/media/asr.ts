@@ -1,9 +1,20 @@
 /**
  * Speech-to-text for audio/video sources (PRD v3 §2.2).
  *
- * Groq `whisper-large-v3-turbo` is ~$0.04 per hour of audio at ~216x realtime —
- * covering 250 tickers x 4 calls/year costs roughly $40/year, so ASR cost is
- * immaterial next to engineering time.
+ * Provider-neutral. Three backends are supported, selected by which credential
+ * is present (see `selectAsrProvider`):
+ *
+ *   1. **ElevenLabs Scribe** — preferred. Returns word-level timestamps *and*
+ *      speaker diarization in one call, which is what play-at-timestamp
+ *      evidence links and speaker attribution both need.
+ *   2. **Groq** `whisper-large-v3-turbo` — cheapest (~$0.04/hr, ~216x realtime),
+ *      segment-level timestamps, no diarization.
+ *   3. **OpenAI** `whisper-1` — fallback; segment timestamps, no diarization.
+ *
+ * **Anthropic is not an option here.** Claude has no speech-to-text endpoint —
+ * its input modalities are text, images, PDFs and files — so audio must be
+ * transcribed by a third party before the (possibly Claude-powered) analysis
+ * layer ever sees it.
  *
  * Two practical constraints shape this module:
  *   - There is a per-request file-size cap, so audio is downsampled to 16 kHz
@@ -17,6 +28,8 @@
  * mis-transcribed figure is never presented as a quote (PRD §8.4).
  */
 import { unlink } from "node:fs/promises";
+import { ElevenLabsScribeClient, scribeCostUsd } from "./asr-elevenlabs.ts";
+import { OpenAiWhisperClient, whisperCostUsd } from "./asr-openai.ts";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -25,16 +38,53 @@ import type { TranscriptSegment } from "../../types.ts";
 export const DEFAULT_ASR_MODEL = "whisper-large-v3-turbo";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions";
 
+/**
+ * A prepared chunk smaller than this is treated as "no audio here" — 16 kHz
+ * mono FLAC of even a second of speech is far larger.
+ */
+export const MIN_CHUNK_BYTES = 2048;
+
 /** Chunk length and overlap, in seconds. */
 export const CHUNK_SECONDS = 1200; // 20 minutes
 export const OVERLAP_SECONDS = 10;
 
+export type AsrBackend = "elevenlabs" | "groq" | "openai";
+
 export interface AsrOptions {
-  apiKey: string;
+  /** Groq key (legacy single-key form; kept for backwards compatibility). */
+  apiKey?: string;
+  groqApiKey?: string;
+  elevenLabsApiKey?: string;
+  openaiApiKey?: string;
+  /** Force a backend instead of auto-selecting by available credential. */
+  backend?: AsrBackend;
   model?: string;
   /** Skip ffmpeg preprocessing (input is already 16 kHz mono). */
   raw?: boolean;
   timeoutMs?: number;
+}
+
+/**
+ * Pick a backend from the credentials available.
+ *
+ * ElevenLabs first: it is the only one that returns diarization, and speaker
+ * attribution is the gap this project actually has. Groq next on cost, then
+ * OpenAI. Returns null when nothing is configured, so callers can degrade to
+ * captions-only rather than failing a run.
+ */
+export function selectAsrProvider(opts: AsrOptions): AsrBackend | null {
+  const groq = opts.groqApiKey || opts.apiKey;
+  if (opts.backend) {
+    const key =
+      opts.backend === "elevenlabs" ? opts.elevenLabsApiKey
+      : opts.backend === "openai" ? opts.openaiApiKey
+      : groq;
+    return key ? opts.backend : null;
+  }
+  if (opts.elevenLabsApiKey) return "elevenlabs";
+  if (groq) return "groq";
+  if (opts.openaiApiKey) return "openai";
+  return null;
 }
 
 export interface AsrResult {
@@ -45,14 +95,41 @@ export interface AsrResult {
 }
 
 export class AsrClient {
-  constructor(private opts: AsrOptions) {}
+  readonly backend: AsrBackend | null;
+  private eleven?: ElevenLabsScribeClient;
+  private openai?: OpenAiWhisperClient;
+
+  constructor(private opts: AsrOptions) {
+    this.backend = selectAsrProvider(opts);
+    if (this.backend === "elevenlabs") {
+      this.eleven = new ElevenLabsScribeClient({
+        apiKey: opts.elevenLabsApiKey!,
+        timeoutMs: opts.timeoutMs,
+      });
+    } else if (this.backend === "openai") {
+      this.openai = new OpenAiWhisperClient({
+        apiKey: opts.openaiApiKey!,
+        timeoutMs: opts.timeoutMs,
+      });
+    }
+  }
 
   get configured(): boolean {
-    return Boolean(this.opts.apiKey);
+    return this.backend !== null;
   }
 
   get model(): string {
-    return this.opts.model ?? DEFAULT_ASR_MODEL;
+    if (this.opts.model) return this.opts.model;
+    if (this.backend === "elevenlabs") return this.eleven!.model;
+    if (this.backend === "openai") return this.openai!.model;
+    return DEFAULT_ASR_MODEL;
+  }
+
+  /** Estimated cost for a run, using the selected backend's rate card. */
+  estimateCostUsd(durationMs: number): number {
+    if (this.backend === "elevenlabs") return scribeCostUsd(durationMs);
+    if (this.backend === "openai") return whisperCostUsd(durationMs);
+    return estimateCostUsd(durationMs);
   }
 
   /**
@@ -63,7 +140,9 @@ export class AsrClient {
    */
   async transcribeFile(path: string): Promise<AsrResult> {
     if (!this.configured) {
-      throw new Error("ASR requires GROQ_API_KEY (PRD v3 §2.2)");
+      throw new Error(
+        "ASR requires one of ELEVENLABS_API_KEY (preferred — adds diarization), GROQ_API_KEY, or OPENAI_API_KEY (PRD v3 §2.2). Anthropic has no speech-to-text endpoint.",
+      );
     }
     const durationMs = await probeDurationMs(path);
     const chunkPlan = planChunks(durationMs);
@@ -72,16 +151,23 @@ export class AsrClient {
     for (const chunk of chunkPlan) {
       const prepared = await prepareAudio(path, chunk.startMs, chunk.durationMs, this.opts.raw);
       try {
-        const verbose = await this.postChunk(prepared);
-        for (const seg of verbose) {
-          const startMs = chunk.startMs + seg.startMs;
+        // A container's declared duration can exceed the audio actually present
+        // (truncated download, still-streaming file, damaged container). Seeking
+        // past the real end yields an empty file, which ASR APIs reject as
+        // corrupt — so stop here rather than posting silence.
+        if ((await Bun.file(prepared).arrayBuffer()).byteLength < MIN_CHUNK_BYTES) {
+          break;
+        }
+        const parts = await this.transcribeChunk(prepared);
+        for (const seg of parts) {
+          const segStart = seg.startMs ?? 0;
           // Drop anything landing inside the overlap of a previous chunk.
-          if (chunk.startMs > 0 && seg.startMs < OVERLAP_SECONDS * 1000) continue;
+          if (chunk.startMs > 0 && segStart < OVERLAP_SECONDS * 1000) continue;
           segments.push({
+            ...seg,
             index: segments.length,
-            text: seg.text,
-            startMs,
-            endMs: chunk.startMs + seg.endMs,
+            startMs: chunk.startMs + segStart,
+            endMs: seg.endMs == null ? undefined : chunk.startMs + seg.endMs,
           });
         }
       } finally {
@@ -92,7 +178,19 @@ export class AsrClient {
     return { model: this.model, segments, durationMs, chunks: chunkPlan.length };
   }
 
-  private async postChunk(path: string): Promise<Cue[]> {
+  /** Dispatch one prepared chunk to the selected backend. */
+  private async transcribeChunk(path: string): Promise<TranscriptSegment[]> {
+    if (this.backend === "elevenlabs") return this.eleven!.transcribe(path);
+    if (this.backend === "openai") return this.openai!.transcribe(path);
+    return (await this.postChunkGroq(path)).map((c, index) => ({
+      index,
+      text: c.text,
+      startMs: c.startMs,
+      endMs: c.endMs,
+    }));
+  }
+
+  private async postChunkGroq(path: string): Promise<Cue[]> {
     const form = new FormData();
     form.append("file", new Blob([await Bun.file(path).arrayBuffer()]), "audio.flac");
     form.append("model", this.model);
@@ -101,7 +199,7 @@ export class AsrClient {
 
     const res = await fetch(GROQ_ENDPOINT, {
       method: "POST",
-      headers: { Authorization: `Bearer ${this.opts.apiKey}` },
+      headers: { Authorization: `Bearer ${this.opts.groqApiKey || this.opts.apiKey}` },
       body: form,
       signal: AbortSignal.timeout(this.opts.timeoutMs ?? 300_000),
     });

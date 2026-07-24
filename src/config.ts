@@ -89,6 +89,12 @@ export interface AppConfig {
     valueSerpApiKey: string;
     /** Groq API key for Whisper ASR of audio/video sources (PRD v3 §2.2). */
     groqApiKey: string;
+    /**
+     * ElevenLabs Scribe — the preferred ASR backend: word-level timestamps
+     * plus speaker diarization. Anthropic offers no speech-to-text endpoint,
+     * so audio transcription is always a third-party call.
+     */
+    elevenLabsApiKey: string;
   };
 }
 
@@ -164,6 +170,7 @@ const defaults: AppConfig = {
     secUserAgent: "transcript-search research",
     valueSerpApiKey: "",
     groqApiKey: "",
+    elevenLabsApiKey: "",
   },
 };
 
@@ -209,6 +216,7 @@ function applyEnv(c: AppConfig): AppConfig {
     secUserAgent: env.SEC_USER_AGENT ?? c.secrets.secUserAgent,
     valueSerpApiKey: env.VALUESERP_API_KEY ?? "",
     groqApiKey: env.GROQ_API_KEY ?? "",
+    elevenLabsApiKey: env.ELEVENLABS_API_KEY ?? "",
   };
   c.databaseUrl = expandHome(c.databaseUrl);
   return c;
