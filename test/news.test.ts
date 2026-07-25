@@ -21,7 +21,7 @@ import {
   isAllowedByRobots,
   parseRobots,
 } from "../src/providers/news/article.ts";
-import { isAboutSubject, mentionsTicker } from "../src/providers/news/index.ts";
+import { headlineKey, isAboutSubject, mentionsTicker } from "../src/providers/news/index.ts";
 import {
   isMultiCompany,
   makeSubjectAttributionTest,
@@ -280,6 +280,21 @@ describe("discovery relevance and link unwrapping", () => {
         "NVIDIA CORP",
       ),
     ).toBe(false);
+  });
+
+  test("mirrors of one story share a headline key", () => {
+    // A real WCC run indexed this story three times: two Yahoo URLs and a UK
+    // edition, all with the same headline.
+    const a = headlineKey("WESCO International (WCC) Aims to Acquire Newark Engineering");
+    expect(headlineKey("WESCO International (WCC) Aims to Acquire Newark Engineering")).toBe(a);
+    // Google News appends " - Publisher", which must not defeat the match.
+    expect(headlineKey("WESCO International (WCC) Aims to Acquire Newark Engineering - Yahoo Finance")).toBe(a);
+    expect(headlineKey("Why WESCO (WCC) Stock Is Up Today")).not.toBe(a);
+  });
+
+  test("headline keys ignore punctuation and case, and never empty out a real title", () => {
+    expect(headlineKey("Nvidia’s H200: shipments begin!")).toBe("nvidia s h200 shipments begin");
+    expect(headlineKey("")).toBe("");
   });
 
   test("redirect wrappers resolve to the publisher URL", () => {

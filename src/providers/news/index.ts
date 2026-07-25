@@ -55,6 +55,24 @@ export interface NewsProviderOptions {
  * ticker. Requiring the headline to name the company keeps the corpus on
  * topic.
  */
+/**
+ * Identity of an article independent of the URL it was found at.
+ *
+ * The same story reaches us several times over: a regional mirror
+ * (`uk.finance.yahoo.com` beside `finance.yahoo.com`), a tracking parameter, an
+ * aggregator's copy. URL-hash dedup misses all of those, and a WCC run indexed
+ * one acquisition story three times. Normalizing the headline catches them:
+ * trailing " - Publisher" (how Google News formats titles) is dropped, then
+ * everything but letters and digits.
+ */
+export function headlineKey(title: string): string {
+  return title
+    .replace(/\s+[-–—|]\s+[^-–—|]{2,40}$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 export function isAboutSubject(
   hit: { title?: string; snippet?: string },
   ticker: string,
@@ -77,8 +95,16 @@ export class NewsProvider extends BaseTranscriptProvider {
     this.serp = new ValueSerpNewsClient({ apiKey: options.valueSerpKey ?? "", num: 10 });
   }
 
+  /** Headline keys already indexed, so a re-run cannot add a mirror of them. */
+  private knownHeadlines = new Set<string>();
+
   setCompanyNames(names: Map<string, string>): void {
     this.companyNames = names;
+  }
+
+  /** Seed with the titles already stored for these tickers (see `headlineKey`). */
+  setKnownHeadlines(titles: Iterable<string>): void {
+    this.knownHeadlines = new Set([...titles].map(headlineKey).filter(Boolean));
   }
 
   get serpConfigured(): boolean {
@@ -140,6 +166,9 @@ export class NewsProvider extends BaseTranscriptProvider {
       }
 
       let kept = 0;
+      // Hits arrive best-source-first, so the first copy of a story wins and
+      // later mirrors of the same headline are dropped.
+      const seenHeadlines = new Set(this.knownHeadlines);
       for (const hit of hits) {
         if (kept >= perTicker) break;
         if (!hit.url || byUrl.has(hit.url)) continue;
@@ -147,6 +176,9 @@ export class NewsProvider extends BaseTranscriptProvider {
         if (this.options.excludeTier3 && tier === 3) continue;
         if (query.from && hit.publishedAt && hit.publishedAt < query.from.slice(0, 10)) continue;
         if (this.options.requireSubject !== false && !isAboutSubject(hit, ticker, name)) continue;
+        const key = headlineKey(hit.title ?? "");
+        if (key && seenHeadlines.has(key)) continue;
+        if (key) seenHeadlines.add(key);
 
         byUrl.set(hit.url, this.toDocument(hit, ticker, tier));
         kept++;

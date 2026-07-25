@@ -112,6 +112,14 @@ export async function refreshTickerNews(
   });
   const name = await companyNameFor(db, ticker);
   if (name) provider.setCompanyNames(new Map([[ticker, name]]));
+  // Headlines we already hold, so a mirror of a story under a different URL
+  // (regional edition, tracking parameter, aggregator copy) is not re-indexed.
+  const titles = await db.execute({
+    sql: `SELECT d.title FROM documents d JOIN transcripts t ON t.document_id = d.id
+          WHERE d.provider_id = 'news' AND t.primary_ticker = ?`,
+    args: [ticker],
+  });
+  provider.setKnownHeadlines(titles.rows.map((r) => String(r.title ?? "")));
 
   opts.onProgress?.(`Searching news for ${name ? `${name} (${ticker})` : ticker}`);
 
