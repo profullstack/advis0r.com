@@ -26,7 +26,9 @@ import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
 import { Mailer } from "./auth/email.ts";
 import { guardResponse, handleAuthRoute, requireUser } from "./auth/routes.ts";
-import { RATE_LIMITS, rateLimit } from "./auth/service.ts";
+import { CoinPayClient } from "./credits/coinpay.ts";
+import { handleCreditsRoute } from "./credits/routes.ts";
+import { COST_PER_ANALYSIS, refundCredits, spendCredits } from "./credits/ledger.ts";
 import { handleWatchlistRoute } from "./auth/watchlist.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
@@ -41,6 +43,11 @@ const mailer = new Mailer({
   mailgunApiKey: config.secrets.mailgunApiKey,
   mailgunDomain: config.secrets.mailgunDomain,
   from: config.secrets.mailFrom || undefined,
+});
+const coinpay = new CoinPayClient({
+  apiKey: config.secrets.coinpayApiKey,
+  businessId: config.secrets.coinpayBusinessId,
+  webhookSecret: config.secrets.coinpayWebhookSecret,
 });
 const authDeps = {
   db,
@@ -407,12 +414,11 @@ const server = Bun.serve({
         // the UI — the client-side check is a courtesy, this is the control.
         const guard = await requireUser(req, db, { requireVerified: true });
         if (guard.failure) return guardResponse(guard.failure);
-        const spend = await rateLimit(db, `analyze:${guard.user!.id}`, RATE_LIMITS.analyze);
-        if (!spend.allowed) {
-          return json(
-            { error: `Analysis limit reached. Try again in ${spend.retryAfterMinutes} minutes.`, rateLimited: true },
-            429,
-          );
+        // Charge before doing the work. A failed analysis is refunded below, so
+        // a user is never billed for output they did not get.
+        const spend = await spendCredits(db, guard.user!.id, COST_PER_ANALYSIS, "analysis");
+        if (!spend.ok) {
+          return json({ error: spend.error, insufficientCredits: true, balance: spend.balance }, 402);
         }
         const ticker = symbol.toUpperCase();
         const requested = url.searchParams.get("provider");
@@ -486,7 +492,9 @@ const server = Bun.serve({
                   send("provider_failed", { provider: prov, error: lastErr });
                 }
               }
-              send("failed", { error: lastErr, elapsedMs: Date.now() - started });
+              // Charged up front; nothing usable was produced, so give it back.
+              await refundCredits(db, guard.user!.id, COST_PER_ANALYSIS, "analysis");
+              send("failed", { error: lastErr, elapsedMs: Date.now() - started, refunded: true });
             } finally {
               clearInterval(beat);
               try {
@@ -513,12 +521,11 @@ const server = Bun.serve({
         if (!symbol) return json({ error: "missing ?symbol=" }, 400);
         const guard = await requireUser(req, db, { requireVerified: true });
         if (guard.failure) return guardResponse(guard.failure);
-        const spend = await rateLimit(db, `analyze:${guard.user!.id}`, RATE_LIMITS.analyze);
-        if (!spend.allowed) {
-          return json(
-            { error: `Analysis limit reached. Try again in ${spend.retryAfterMinutes} minutes.`, rateLimited: true },
-            429,
-          );
+        // Charge before doing the work. A failed analysis is refunded below, so
+        // a user is never billed for output they did not get.
+        const spend = await spendCredits(db, guard.user!.id, COST_PER_ANALYSIS, "analysis");
+        if (!spend.ok) {
+          return json({ error: spend.error, insufficientCredits: true, balance: spend.balance }, 402);
         }
         const requested = url.searchParams.get("provider");
         const all = [...registry.ai.keys()].filter((k) => k !== "offline");
@@ -559,6 +566,7 @@ const server = Bun.serve({
             // fall through to the next provider
           }
         }
+        await refundCredits(db, guard.user!.id, COST_PER_ANALYSIS, "analysis");
         return json({ error: lastErr }, 502);
       }
 
@@ -640,6 +648,9 @@ const server = Bun.serve({
       // stays public.
       const watchlistResponse = await handleWatchlistRoute(req, p, db);
       if (watchlistResponse) return watchlistResponse;
+
+      const creditsResponse = await handleCreditsRoute(req, p, { db, coinpay, appUrl: config.appUrl });
+      if (creditsResponse) return creditsResponse;
 
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
 

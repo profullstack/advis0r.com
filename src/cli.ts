@@ -364,6 +364,123 @@ program
     });
   });
 
+// --- credits --------------------------------------------------------------
+const credits = program
+  .command("credits")
+  .description("Inspect and manage user credits (PRD v3 §8).");
+
+credits
+  .command("balance <email>")
+  .description("Show a user's credit balance and recent ledger entries.")
+  .action(async (email: string) => {
+    await withApp(async ({ db }) => {
+      const { getBalance, recentLedger } = await import("./credits/ledger.ts");
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const b = await getBalance(db, user.id);
+      console.log(`${email}`);
+      console.log(`  balance:            ${b.balance} credits`);
+      console.log(`  free monthly grant: ${b.freeMonthlyCredits} (period ${b.period})`);
+      console.log(`  spent this period:  ${b.spentThisPeriod}`);
+      const ledger = await recentLedger(db, user.id, 15);
+      if (ledger.length) {
+        console.log("  recent:");
+        for (const e of ledger) {
+          const sign = e.delta > 0 ? "+" : "";
+          console.log(`    ${e.createdAt.slice(0, 19)}  ${(sign + e.delta).padStart(6)}  ${e.reason}`);
+        }
+      }
+    });
+  });
+
+credits
+  .command("grant <email> <amount>")
+  .description("Manually add (or subtract, with a negative amount) credits.")
+  .option("--note <text>", "reason recorded in the ledger", "manual adjustment")
+  .action(async (email: string, amount: string, opts) => {
+    await withApp(async ({ db }) => {
+      const { getBalance } = await import("./credits/ledger.ts");
+      const { newId } = await import("./auth/crypto.ts");
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const delta = Number(amount);
+      if (!Number.isInteger(delta) || delta === 0) return console.error("Amount must be a non-zero integer.");
+      await db.execute({
+        sql: `INSERT INTO credits_ledger (id, user_id, delta, reason, idem, note, created_at)
+              VALUES (?,?,?,?,?,?,?)`,
+        args: [newId("cr"), user.id, delta, "adjustment", newId("adj"), String(opts.note), new Date().toISOString()],
+      });
+      console.log(`${delta > 0 ? "Granted" : "Deducted"} ${Math.abs(delta)} credits. New balance: ${(await getBalance(db, user.id)).balance}`);
+    });
+  });
+
+credits
+  .command("packages")
+  .description("List purchasable credit packages.")
+  .action(async () => {
+    const { CREDIT_PACKAGES, FREE_MONTHLY_CREDITS } = await import("./credits/ledger.ts");
+    console.log(`Free plan: ${FREE_MONTHLY_CREDITS} credits per month.`);
+    for (const p of CREDIT_PACKAGES) {
+      console.log(`  ${p.id.padEnd(9)} ${String(p.credits).padStart(5)} credits  $${p.usd}  (${(p.usd / p.credits * 100).toFixed(2)}¢/credit)`);
+    }
+  });
+
+credits
+  .command("buy <email> <packageId>")
+  .description("Create a CoinPayPortal payment for a credit package and print the payment URL.")
+  .option("--blockchain <chain>", "chain to pay on", "ethereum")
+  .action(async (email: string, packageId: string, opts) => {
+    await withApp(async ({ config, db }) => {
+      const { CoinPayClient } = await import("./credits/coinpay.ts");
+      const { findPackage } = await import("./credits/ledger.ts");
+      const { newId } = await import("./auth/crypto.ts");
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const pkg = findPackage(packageId);
+      if (!pkg) return console.error(`Unknown package "${packageId}". Try: transcripts credits packages`);
+
+      const client = new CoinPayClient({
+        apiKey: config.secrets.coinpayApiKey,
+        businessId: config.secrets.coinpayBusinessId,
+        webhookSecret: config.secrets.coinpayWebhookSecret,
+      });
+      if (!client.configured) {
+        return console.error("CoinPayPortal is not configured (COINPAYPORTAL_API_KEY / COINPAYPORTAL_WEBHOOK_SECRET).");
+      }
+      const payment = await client.createPayment({
+        amountUsd: pkg.usd,
+        blockchain: String(opts.blockchain),
+        description: `advis0r.com — ${pkg.label}`,
+        metadata: { user_id: user.id, package_id: pkg.id, credits: String(pkg.credits) },
+        webhookUrl: `${config.appUrl.replace(/\/$/, "")}/api/credits/webhook`,
+      });
+      await db.execute({
+        sql: `INSERT INTO credit_purchases
+              (id, user_id, payment_id, package_id, credits, amount_usd, blockchain, status, payment_url, created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        args: [newId("pur"), user.id, payment.paymentId, pkg.id, pkg.credits, pkg.usd,
+               String(opts.blockchain), "pending", payment.paymentUrl, new Date().toISOString()],
+      });
+      console.log(`Payment created for ${email}: ${pkg.label} ($${pkg.usd})`);
+      console.log(`  payment id: ${payment.paymentId}`);
+      console.log(`  pay here:   ${payment.paymentUrl}`);
+      console.log("Credits are added automatically once the payment confirms (webhook).");
+    });
+  });
+
+/** Look up a user by email for the CLI's admin commands. */
+async function findUserByEmail(
+  db: ReturnType<typeof getDb>,
+  email: string,
+): Promise<{ id: string; email: string } | null> {
+  const rs = await db.execute({
+    sql: "SELECT id, email FROM users WHERE email = ?",
+    args: [email.trim().toLowerCase()],
+  });
+  const row = rs.rows[0];
+  return row ? { id: String(row.id), email: String(row.email) } : null;
+}
+
 // --- reclassify -----------------------------------------------------------
 program
   .command("reclassify")

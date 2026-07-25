@@ -409,6 +409,37 @@ CREATE TABLE IF NOT EXISTS watchlist_items (
   UNIQUE(user_id, ticker)
 );
 
+-- Credits (PRD v3 §8). Append-only ledger: the balance is always SUM(delta),
+-- never a stored mutable number that can drift from its own history.
+CREATE TABLE IF NOT EXISTS credits_ledger (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  delta         INTEGER NOT NULL,          -- positive = granted/purchased, negative = spent
+  reason        TEXT NOT NULL,             -- monthly_grant | purchase | spend:<op> | adjustment
+  -- Idempotency key. For a monthly grant this is the YYYY-MM period; for a
+  -- purchase it is the CoinPay payment id. UNIQUE(user_id, reason, idem) makes
+  -- double-granting and double-crediting impossible even under a retry.
+  idem          TEXT,
+  note          TEXT,
+  created_at    TEXT NOT NULL,
+  UNIQUE(user_id, reason, idem)
+);
+
+-- Credit purchases via CoinPayPortal.
+CREATE TABLE IF NOT EXISTS credit_purchases (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  payment_id    TEXT NOT NULL UNIQUE,      -- CoinPayPortal payment id
+  package_id    TEXT NOT NULL,
+  credits       INTEGER NOT NULL,
+  amount_usd    REAL NOT NULL,
+  blockchain    TEXT,
+  status        TEXT NOT NULL,             -- pending | confirmed | failed | expired
+  payment_url   TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT
+);
+
 -- Throttling for auth endpoints (login, signup, reset requests).
 CREATE TABLE IF NOT EXISTS auth_attempts (
   id            TEXT PRIMARY KEY,
@@ -425,6 +456,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_authtokens_user ON auth_tokens(user_id, kind);
 CREATE INDEX IF NOT EXISTS idx_authattempts_bucket ON auth_attempts(bucket, created_at);
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist_items(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_credits_user ON credits_ledger(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_purchases_user ON credit_purchases(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bars_ticker_tf ON market_bars(ticker, timeframe, ts);
 CREATE INDEX IF NOT EXISTS idx_analyses_ticker ON analyses(ticker, as_of);
 CREATE INDEX IF NOT EXISTS idx_segments_transcript ON transcript_segments(transcript_id, seg_index);

@@ -281,3 +281,21 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .ai-promo-cta { width: 100%; }
 .ai-promo-alt { margin: .65rem 0 0; text-align: center; font-size: .78rem; color: var(--dim, #8b95a5); }
 .ai-promo-alt a { color: #2f81f7; text-decoration: none; }
+
+/* ---- Credits ---- */
+.creditbar { display: flex; align-items: center; margin-left: auto; }
+.authbar { margin-left: .5rem; }
+.credit-chip { background: rgba(47,129,247,.1); border: 1px solid rgba(47,129,247,.32); color: #7ab4ff;
+  border-radius: 20px; padding: .18rem .6rem; font-size: .76rem; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.credit-chip:hover { border-color: rgba(122,180,255,.6); }
+.credit-chip.low { background: rgba(224,179,65,.1); border-color: rgba(224,179,65,.4); color: #e0b341; }
+.credit-lab { opacity: .75; }
+.credit-pkgs { display: grid; gap: .5rem; margin: .3rem 0 .2rem; }
+.credit-pkg { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "c p" "r p";
+  gap: .1rem .8rem; text-align: left; background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: .6rem .8rem; cursor: pointer;
+  color: inherit; font-family: inherit; }
+.credit-pkg:hover { border-color: #2f81f7; background: rgba(47,129,247,.07); }
+.credit-pkg-c { grid-area: c; font-weight: 600; font-size: .9rem; }
+.credit-pkg-r { grid-area: r; font-size: .72rem; color: var(--dim, #8b95a5); }
+.credit-pkg-p { grid-area: p; align-self: center; font-size: 1.05rem; font-weight: 600; color: #7ab4ff; }

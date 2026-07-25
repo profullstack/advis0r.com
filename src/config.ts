@@ -96,6 +96,10 @@ export interface AppConfig {
     mailgunApiKey: string;
     mailgunDomain: string;
     mailFrom: string;
+    /** CoinPayPortal — credit purchases (PRD v3 §8). */
+    coinpayApiKey: string;
+    coinpayBusinessId: string;
+    coinpayWebhookSecret: string;
     /**
      * ElevenLabs Scribe — the preferred ASR backend: word-level timestamps
      * plus speaker diarization. Anthropic offers no speech-to-text endpoint,
@@ -186,6 +190,9 @@ const defaults: AppConfig = {
     mailgunApiKey: "",
     mailgunDomain: "",
     mailFrom: "",
+    coinpayApiKey: "",
+    coinpayBusinessId: "",
+    coinpayWebhookSecret: "",
   },
 };
 
@@ -237,6 +244,9 @@ function applyEnv(c: AppConfig): AppConfig {
     mailgunApiKey: env.MAILGUN_API_KEY ?? "",
     mailgunDomain: env.MAILGUN_DOMAIN ?? "",
     mailFrom: env.MAIL_FROM ?? "",
+    coinpayApiKey: env.COINPAYPORTAL_API_KEY ?? "",
+    coinpayBusinessId: env.COINPAYPORTAL_BUSINESS_ID ?? "",
+    coinpayWebhookSecret: env.COINPAYPORTAL_WEBHOOK_SECRET ?? "",
   };
   c.databaseUrl = expandHome(c.databaseUrl);
   return c;

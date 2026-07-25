@@ -643,6 +643,7 @@ function sharpen(ticker) {
   es.addEventListener("result", (e) => {
     const r = JSON.parse(e.data);
     stop();
+    window.dispatchEvent(new CustomEvent("advis0r:credits-changed"));
     const dd = { ticker, aiProviders: ["ai"], aiAnalysis: { provider: r.provider, model: r.model, overallScore: r.overallScore, confidence: r.confidence, analysis: r.analysis } };
     sec.outerHTML = analysisBlock(dd);
   });
@@ -650,6 +651,7 @@ function sharpen(ticker) {
   // confused with EventSource's built-in error event, which carries no data.
   es.addEventListener("failed", (e) => {
     stop();
+    window.dispatchEvent(new CustomEvent("advis0r:credits-changed"));
     const msg = JSON.parse(e.data).error || "analysis failed";
     step(msg, { bad: true });
     paint(`Sharpen failed: ${String(msg).slice(0, 200)}`);

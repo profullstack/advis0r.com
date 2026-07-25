@@ -234,3 +234,87 @@ document.addEventListener("keydown", (e) => {
 
 refreshAuth();
 handleAuthLanding();
+
+/* ---- Credits (PRD v3 §8) ----
+   Free plan grants 100 credits/month; AI analysis spends them; more are bought
+   with crypto via CoinPayPortal. */
+
+let creditState = null;
+
+async function refreshCredits() {
+  if (!authState.user) { creditState = null; renderCredits(); return; }
+  try {
+    const r = await fetch("/api/credits", { credentials: "same-origin" });
+    creditState = r.ok ? await r.json() : null;
+  } catch { creditState = null; }
+  renderCredits();
+}
+
+function renderCredits() {
+  const el = document.getElementById("creditbar");
+  if (!el) return;
+  if (!creditState) { el.innerHTML = ""; return; }
+  const low = creditState.balance <= 10;
+  el.innerHTML = `<button class="credit-chip${low ? " low" : ""}" id="credits-open"
+    title="${creditState.balance} credits · ${creditState.freeMonthlyCredits} free each month">
+    ${creditState.balance} <span class="credit-lab">credits</span></button>`;
+}
+
+function openCredits() {
+  if (!creditState) return;
+  closeAuth();
+  const el = document.createElement("div");
+  el.id = "auth-modal";
+  el.className = "modal";
+  const pkgs = (creditState.packages || []).map((p) => `
+    <button class="credit-pkg" data-buy="${aEsc(p.id)}">
+      <span class="credit-pkg-c">${p.credits.toLocaleString()} credits</span>
+      <span class="credit-pkg-p">$${p.usd}</span>
+      <span class="credit-pkg-r">${(p.usd / p.credits * 100).toFixed(2)}¢ each</span>
+    </button>`).join("");
+  el.innerHTML = `<div class="modal-backdrop" data-auth-close></div>
+    <div class="modal-panel auth-panel">
+      <h2 class="auth-h">Credits</h2>
+      <p class="auth-sub">You have <strong>${creditState.balance}</strong> credits.
+        Every account gets ${creditState.freeMonthlyCredits} free each month
+        (${creditState.spentThisPeriod} used in ${aEsc(creditState.period)}).
+        One credit runs one AI analysis.</p>
+      ${creditState.paymentsEnabled
+        ? `<p class="auth-sub">Top up with crypto — paid via CoinPayPortal.</p>
+           <div class="credit-pkgs">${pkgs}</div>`
+        : `<p class="auth-note">Credit purchases are not available right now.</p>`}
+      <div id="auth-note"></div>
+    </div>`;
+  document.body.appendChild(el);
+}
+
+async function buyCredits(packageId) {
+  authNote("Creating payment…");
+  try {
+    const res = await fetch("/api/credits/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ packageId }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "Could not start the payment.");
+    // The hosted CoinPayPortal page handles the actual crypto payment; credits
+    // land via the signed webhook once it confirms.
+    authNote("Opening the payment page — credits arrive once it confirms.", "ok");
+    window.open(d.paymentUrl, "_blank", "noopener");
+  } catch (e) {
+    authNote(e.message, "bad");
+  }
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#credits-open")) { e.preventDefault(); openCredits(); return; }
+  const buy = e.target.closest("[data-buy]");
+  if (buy) { e.preventDefault(); buyCredits(buy.dataset.buy); }
+});
+
+window.addEventListener("advis0r:auth-changed", refreshCredits);
+// Analysis spends a credit, so the displayed balance must follow it.
+window.addEventListener("advis0r:credits-changed", refreshCredits);
+refreshCredits();
