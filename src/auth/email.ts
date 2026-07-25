@@ -35,6 +35,21 @@ export interface MailerOptions {
 
 export const DEFAULT_FROM = "advis0r <noreply@advis0r.com>";
 
+/**
+ * Hard block on outbound mail.
+ *
+ * Sending is suppressed under a test runner, or whenever `MAIL_DISABLED` is
+ * set. This is a belt-and-braces guard: it holds even if a real API key leaks
+ * into the environment a test runs in, so a test suite can never deliver mail
+ * to a live inbox. It is checked before the transport is chosen, so there is no
+ * path around it.
+ */
+export function mailSuppressed(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.MAIL_DISABLED === "1" || env.MAIL_DISABLED === "true") return true;
+  // Bun and Node both set NODE_ENV=test for their test runners.
+  return env.NODE_ENV === "test" || env.BUN_ENV === "test";
+}
+
 export class Mailer {
   constructor(private opts: MailerOptions = {}) {}
 
@@ -42,10 +57,19 @@ export class Mailer {
     return this.opts.from || DEFAULT_FROM;
   }
 
-  get transport(): MailResult["transport"] {
+  /**
+   * Which transport the credentials select, ignoring suppression. Kept separate
+   * from `transport` so credential handling stays testable under a test runner,
+   * where the suppression guard forces "logged".
+   */
+  get selectedTransport(): MailResult["transport"] {
     if (this.opts.resendApiKey) return "resend";
     if (this.opts.mailgunApiKey && this.opts.mailgunDomain) return "mailgun";
     return "logged";
+  }
+
+  get transport(): MailResult["transport"] {
+    return mailSuppressed() ? "logged" : this.selectedTransport;
   }
 
   get configured(): boolean {
@@ -58,10 +82,14 @@ export class Mailer {
         return this.sendResend(msg);
       case "mailgun":
         return this.sendMailgun(msg);
-      default:
+      default: {
         // Never claim success for an email that was not sent.
-        console.warn(`[mail] no transport configured — not sending "${msg.subject}" to ${msg.to}`);
-        return { ok: false, transport: "logged", error: "no email transport configured" };
+        const why = mailSuppressed()
+          ? "mail suppressed (test run or MAIL_DISABLED)"
+          : "no email transport configured";
+        console.warn(`[mail] ${why} — not sending "${msg.subject}" to ${msg.to}`);
+        return { ok: false, transport: "logged", error: why };
+      }
     }
   }
 

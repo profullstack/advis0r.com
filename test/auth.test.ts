@@ -17,7 +17,7 @@ import {
   verifyPassword,
 } from "../src/auth/crypto.ts";
 import { SESSION_COOKIE, clearCookie, clientIp, sessionCookie } from "../src/auth/routes.ts";
-import { Mailer, resetEmail, verificationEmail } from "../src/auth/email.ts";
+import { Mailer, mailSuppressed, resetEmail, verificationEmail } from "../src/auth/email.ts";
 import { MAX_WATCHLIST_ITEMS, normalizeTicker } from "../src/auth/watchlist.ts";
 
 describe("password hashing", () => {
@@ -133,9 +133,11 @@ describe("client IP resolution", () => {
 
 describe("mailer", () => {
   test("selects a transport from available credentials", () => {
-    expect(new Mailer({ resendApiKey: "k" }).transport).toBe("resend");
-    expect(new Mailer({ mailgunApiKey: "k", mailgunDomain: "d" }).transport).toBe("mailgun");
-    expect(new Mailer({ mailgunApiKey: "k" }).transport).toBe("logged"); // domain required
+    // `selectedTransport` is the credential choice; `transport` additionally
+    // applies the send guard, which is forced on under the test runner.
+    expect(new Mailer({ resendApiKey: "k" }).selectedTransport).toBe("resend");
+    expect(new Mailer({ mailgunApiKey: "k", mailgunDomain: "d" }).selectedTransport).toBe("mailgun");
+    expect(new Mailer({ mailgunApiKey: "k" }).selectedTransport).toBe("logged"); // domain required
   });
 
   test("never claims success when nothing is configured", async () => {
@@ -178,5 +180,23 @@ describe("watchlist ticker validation", () => {
   test("is bounded so one account cannot fill the table", () => {
     expect(MAX_WATCHLIST_ITEMS).toBeGreaterThan(0);
     expect(MAX_WATCHLIST_ITEMS).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe("outbound mail is blocked under test", () => {
+  test("a REAL api key still cannot send while NODE_ENV=test", async () => {
+    // This is the guard that stops a test run delivering to a live inbox.
+    // The suite itself runs with NODE_ENV=test, so this exercises the real path.
+    const m = new Mailer({ resendApiKey: "re_a_real_looking_key" });
+    expect(mailSuppressed()).toBe(true);
+    expect(m.transport).toBe("logged");
+    const r = await m.send({ to: "someone@example.com", subject: "s", text: "t", html: "<p>t</p>" });
+    expect(r.ok).toBe(false);
+    expect(r.transport).toBe("logged");
+  });
+
+  test("MAIL_DISABLED suppresses mail outside the test runner too", () => {
+    expect(mailSuppressed({ MAIL_DISABLED: "1" })).toBe(true);
+    expect(mailSuppressed({ NODE_ENV: "production" })).toBe(false);
   });
 });
