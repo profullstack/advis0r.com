@@ -130,6 +130,11 @@ async function runWatchlist() {
 
 async function sharpenAll() {
   if (!lastWatchlist.length) return;
+  if (!authState.user) { openAuth("signup", {}); return; }
+  if (!authState.user.emailVerified) {
+    $("#wl-summary").textContent = "Verify your email to run AI analysis — check your inbox.";
+    return;
+  }
   const btn = $("#wl-sharpen");
   btn.disabled = true;
   const total = lastWatchlist.length;
@@ -141,7 +146,15 @@ async function sharpenAll() {
     if (card) card.style.opacity = "0.5";
     try {
       await api(`/api/analyze?symbol=${encodeURIComponent(t)}`);
-    } catch { /* skip failures, keep going */ }
+    } catch (e) {
+      // A 401/403/429 applies to every remaining ticker, so stop rather than
+      // hammering the endpoint once per candidate.
+      if (["401", "403", "429"].includes(e.message)) {
+        $("#wl-summary").textContent = "AI analysis needs a verified account. Sign in to continue.";
+        break;
+      }
+      /* otherwise skip this ticker and keep going */
+    }
     if (card) card.style.opacity = "";
   }
   btn.disabled = false;
@@ -556,7 +569,9 @@ function analysisBlock(d) {
     : `<span class="badge conservative">offline · deterministic</span>`;
   // No fixed provider: the server tries OpenAI first, falls back to Anthropic.
   const btn = providers.length
-    ? `<button class="sharpen-btn" data-sharpen="${esc(d.ticker)}">${ai ? "↻ Re-run AI" : "✨ Sharpen with AI"}</button>`
+    ? `<button class="sharpen-btn" data-sharpen="${esc(d.ticker)}">${
+        !authState.user ? "✨ Sharpen with AI — free with an account" : ai ? "↻ Re-run AI" : "✨ Sharpen with AI"
+      }</button>`
     : "";
   const chips = (arr, cls, mark) => (arr && arr.length ? `<div class="chips">${arr.slice(0, 6).map((x) => `<span class="chip ${cls}">${mark} ${esc(x)}</span>`).join("")}</div>` : "");
   const scen = (src.bullCase || src.bearCase)
@@ -579,6 +594,11 @@ function analysisBlock(d) {
 function sharpen(ticker) {
   const sec = document.getElementById("ai-analysis-section");
   if (!sec) return;
+  // Client-side courtesy check — the server enforces this regardless. Prompting
+  // here avoids opening an EventSource that can only fail, since EventSource
+  // cannot read a 401 body.
+  if (!authState.user) { sec.innerHTML = aiPromo(ticker); return; }
+  if (!authState.user.emailVerified) { sec.innerHTML = aiVerifyPrompt(); return; }
   const started = Date.now();
   const lines = [];
 
@@ -897,3 +917,37 @@ document.addEventListener("click", (e) => {
   if (e.target.closest('#tabs button[data-view="watchlist"]')) loadMyWatchlist();
 });
 window.addEventListener("advis0r:auth-changed", loadMyWatchlist);
+
+
+/* ---- Sign-in promo for the AI analysis paths ----
+   AI analysis is a metered LLM call, so it requires a verified account. Rather
+   than a bare error, anonymous visitors get the pitch. */
+
+function aiPromo(ticker) {
+  return `<h3 class="an-head">Analysis</h3>
+    <div class="ai-promo">
+      <div class="ai-promo-badge">✨ Free with an account</div>
+      <p class="ai-promo-h">Get an AI-sharpened read on ${esc(ticker)}</p>
+      <ul class="ai-promo-list">
+        <li>A grounded thesis, catalysts and risks — every claim cites stored evidence</li>
+        <li>Scores that weigh corroboration across filings, news and media</li>
+        <li>Your own saved watchlist, on any device</li>
+      </ul>
+      <button class="primary ai-promo-cta" data-promo-signup>Create a free account</button>
+      <p class="ai-promo-alt">Already have one? <a href="#" data-auth-mode-open="login">Sign in</a></p>
+    </div>`;
+}
+
+function aiVerifyPrompt() {
+  return `<h3 class="an-head">Analysis</h3>
+    <div class="ai-promo">
+      <p class="ai-promo-h">Verify your email to run AI analysis</p>
+      <p class="ai-promo-sub">We sent a link when you signed up. It confirms you're a real person before we spend on model calls.</p>
+    </div>`;
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-promo-signup]")) { e.preventDefault(); openAuth("signup"); return; }
+  const open = e.target.closest("[data-auth-mode-open]");
+  if (open) { e.preventDefault(); openAuth(open.dataset.authModeOpen); }
+});

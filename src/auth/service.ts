@@ -7,8 +7,11 @@
  *  - **No user enumeration.** Signup and password-reset return the same shape
  *    whether or not the address exists. An attacker must not be able to use
  *    this service to discover who has an account.
- *  - **Nothing is gated.** Accounts exist, but no existing route requires one —
- *    adding auth must not break anything that works today.
+ *  - **Gating is narrow and deliberate.** Only the saved watchlist and the
+ *    metered AI-analysis paths require an account; browsing, search, signals
+ *    and topic discovery stay public. Analysis additionally requires a verified
+ *    email, since unverified accounts are free to create in bulk and each call
+ *    costs real money.
  */
 import type { Client } from "@libsql/client";
 import {
@@ -32,6 +35,9 @@ export const RATE_LIMITS = {
   login: { max: 8, windowMinutes: 15 },
   signup: { max: 5, windowMinutes: 60 },
   reset: { max: 5, windowMinutes: 60 },
+  // Each analyze call is a real, metered LLM request (~40s of frontier-model
+  // time). Cap it per account so one signed-in user cannot drain the budget.
+  analyze: { max: 40, windowMinutes: 60 },
 } as const;
 
 export interface PublicUser {

@@ -16,6 +16,7 @@
 import type { Client } from "@libsql/client";
 import { Mailer } from "./email.ts";
 import {
+  type PublicUser,
   RATE_LIMITS,
   SESSION_TTL_DAYS,
   type AuthContext,
@@ -195,4 +196,59 @@ export async function handleAuthRoute(
   }
 
   return json({ error: "not found" }, 404);
+}
+
+/* ---------------- route guards ---------------- */
+
+export interface GuardFailure {
+  status: number;
+  body: { error: string; authRequired?: boolean; verificationRequired?: boolean };
+}
+
+export interface GuardResult {
+  user?: PublicUser;
+  failure?: GuardFailure;
+}
+
+/**
+ * Resolve the caller for a protected route.
+ *
+ * `requireVerified` matters for anything that costs money: an unverified
+ * account is free to create in bulk, so email verification is the cheapest
+ * barrier between an abusive signup and metered LLM spend.
+ *
+ * The two failure modes are reported distinctly (`authRequired` vs
+ * `verificationRequired`) because the UI response differs — one opens the
+ * sign-in modal, the other tells the user to check their inbox.
+ */
+export async function requireUser(
+  req: Request,
+  db: Client,
+  opts: { requireVerified?: boolean } = {},
+): Promise<GuardResult> {
+  const user = await userForSession(db, readCookie(req, SESSION_COOKIE));
+  if (!user) {
+    return {
+      failure: {
+        status: 401,
+        body: { error: "Sign in to run AI analysis.", authRequired: true },
+      },
+    };
+  }
+  if (opts.requireVerified && !user.emailVerified) {
+    return {
+      failure: {
+        status: 403,
+        body: {
+          error: "Verify your email address to run AI analysis. Check your inbox for the link.",
+          verificationRequired: true,
+        },
+      },
+    };
+  }
+  return { user };
+}
+
+export function guardResponse(failure: GuardFailure): Response {
+  return json(failure.body, failure.status);
 }

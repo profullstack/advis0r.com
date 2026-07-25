@@ -25,7 +25,8 @@ import { buildEvidence } from "./evidence/builder.ts";
 import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
 import { Mailer } from "./auth/email.ts";
-import { handleAuthRoute } from "./auth/routes.ts";
+import { guardResponse, handleAuthRoute, requireUser } from "./auth/routes.ts";
+import { RATE_LIMITS, rateLimit } from "./auth/service.ts";
 import { handleWatchlistRoute } from "./auth/watchlist.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
@@ -402,6 +403,17 @@ const server = Bun.serve({
       if (p === "/api/analyze/stream") {
         const symbol = url.searchParams.get("symbol");
         if (!symbol) return json({ error: "missing ?symbol=" }, 400);
+        // Metered LLM path: signed in AND verified. Enforced here as well as in
+        // the UI — the client-side check is a courtesy, this is the control.
+        const guard = await requireUser(req, db, { requireVerified: true });
+        if (guard.failure) return guardResponse(guard.failure);
+        const spend = await rateLimit(db, `analyze:${guard.user!.id}`, RATE_LIMITS.analyze);
+        if (!spend.allowed) {
+          return json(
+            { error: `Analysis limit reached. Try again in ${spend.retryAfterMinutes} minutes.`, rateLimited: true },
+            429,
+          );
+        }
         const ticker = symbol.toUpperCase();
         const requested = url.searchParams.get("provider");
         // `balanced` (Sonnet-tier) rather than `latest`: measured 44s vs 67s
@@ -499,6 +511,15 @@ const server = Bun.serve({
       if (p === "/api/analyze") {
         const symbol = url.searchParams.get("symbol");
         if (!symbol) return json({ error: "missing ?symbol=" }, 400);
+        const guard = await requireUser(req, db, { requireVerified: true });
+        if (guard.failure) return guardResponse(guard.failure);
+        const spend = await rateLimit(db, `analyze:${guard.user!.id}`, RATE_LIMITS.analyze);
+        if (!spend.allowed) {
+          return json(
+            { error: `Analysis limit reached. Try again in ${spend.retryAfterMinutes} minutes.`, rateLimited: true },
+            429,
+          );
+        }
         const requested = url.searchParams.get("provider");
         const all = [...registry.ai.keys()].filter((k) => k !== "offline");
         const order =

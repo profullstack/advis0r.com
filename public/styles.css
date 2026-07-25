@@ -268,3 +268,16 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .wl-remove { background: none; border: 1px solid rgba(255,255,255,.14); color: var(--dim, #8b95a5);
   border-radius: 6px; padding: .2rem .55rem; font-size: .74rem; cursor: pointer; font-family: inherit; }
 .wl-remove:hover { border-color: #ff8f8f; color: #ff8f8f; }
+
+/* ---- AI analysis sign-in promo ---- */
+.ai-promo { border: 1px solid rgba(47,129,247,.28); background: linear-gradient(180deg, rgba(47,129,247,.07), rgba(47,129,247,.02));
+  border-radius: 10px; padding: 1.1rem 1.15rem; margin-top: .4rem; }
+.ai-promo-badge { display: inline-block; font-size: .68rem; letter-spacing: .04em; text-transform: uppercase;
+  color: #7ab4ff; border: 1px solid rgba(122,180,255,.35); border-radius: 20px; padding: .12rem .55rem; margin-bottom: .6rem; }
+.ai-promo-h { margin: 0 0 .6rem; font-size: 1rem; font-weight: 600; color: var(--fg, #d7dee8); line-height: 1.35; }
+.ai-promo-sub { margin: 0; color: var(--dim, #8b95a5); font-size: .85rem; line-height: 1.55; }
+.ai-promo-list { margin: 0 0 .95rem; padding-left: 1.05rem; color: var(--dim, #8b95a5); font-size: .84rem; line-height: 1.6; }
+.ai-promo-list li { margin-bottom: .2rem; }
+.ai-promo-cta { width: 100%; }
+.ai-promo-alt { margin: .65rem 0 0; text-align: center; font-size: .78rem; color: var(--dim, #8b95a5); }
+.ai-promo-alt a { color: #2f81f7; text-decoration: none; }
