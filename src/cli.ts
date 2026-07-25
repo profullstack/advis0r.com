@@ -428,7 +428,7 @@ credits
 credits
   .command("buy <email> <packageId>")
   .description("Create a CoinPayPortal payment for a credit package and print the payment URL.")
-  .option("--blockchain <chain>", "chain to pay on", "ethereum")
+  .option("--blockchain <chain>", "chain code, e.g. USDC_POL / ETH / BTC", "USDC_POL")
   .action(async (email: string, packageId: string, opts) => {
     await withApp(async ({ config, db }) => {
       const { CoinPayClient } = await import("./credits/coinpay.ts");
@@ -452,7 +452,7 @@ credits
         blockchain: String(opts.blockchain),
         description: `advis0r.com — ${pkg.label}`,
         metadata: { user_id: user.id, package_id: pkg.id, credits: String(pkg.credits) },
-        webhookUrl: `${config.appUrl.replace(/\/$/, "")}/api/credits/webhook`,
+        webhookUrl: `${config.appUrl.replace(/\/$/, "")}/api/webhook/coinpay`,
       });
       await db.execute({
         sql: `INSERT INTO credit_purchases

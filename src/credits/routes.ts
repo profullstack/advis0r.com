@@ -3,7 +3,7 @@
  *
  *   GET  /api/credits              -> balance, packages, recent ledger
  *   POST /api/credits/checkout     -> { packageId, blockchain } -> hosted payment URL
- *   POST /api/credits/webhook      -> CoinPayPortal callback (signed, unauthenticated)
+ *   POST /api/webhook/coinpay      -> CoinPayPortal callback (signed, unauthenticated)
  *
  * The webhook is the only unauthenticated route here and the only one that
  * grants credits, so it carries the strictest handling: signature first, then
@@ -12,7 +12,7 @@
 import type { Client } from "@libsql/client";
 import { newId } from "../auth/crypto.ts";
 import { guardResponse, requireUser } from "../auth/routes.ts";
-import { CoinPayClient, parseWebhook } from "./coinpay.ts";
+import { CoinPayClient, DEFAULT_CHAIN, SUPPORTED_CHAINS, isSupportedChain, parseWebhook } from "./coinpay.ts";
 import {
   CREDIT_PACKAGES,
   creditPurchase,
@@ -33,16 +33,20 @@ export interface CreditsDeps {
   appUrl: string;
 }
 
+/** The webhook URL registered with CoinPayPortal. */
+export const WEBHOOK_PATH = "/api/webhook/coinpay";
+
 export async function handleCreditsRoute(
   req: Request,
   path: string,
   deps: CreditsDeps,
 ): Promise<Response | null> {
-  if (!path.startsWith("/api/credits")) return null;
+  const isWebhook = path === WEBHOOK_PATH;
+  if (!path.startsWith("/api/credits") && !isWebhook) return null;
   const { db, coinpay } = deps;
 
   /* ---- webhook: unauthenticated but signed ---- */
-  if (path === "/api/credits/webhook") {
+  if (isWebhook) {
     if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
     // Read the raw body: the signature covers the exact bytes, so re-serializing
     // parsed JSON would produce a different string and fail verification.
@@ -115,6 +119,8 @@ export async function handleCreditsRoute(
       ...balance,
       packages: CREDIT_PACKAGES,
       paymentsEnabled: coinpay.configured,
+      chains: SUPPORTED_CHAINS,
+      defaultChain: DEFAULT_CHAIN,
       ledger: await recentLedger(db, user.id),
     });
   }
@@ -131,7 +137,12 @@ export async function handleCreditsRoute(
     }
     const pkg = findPackage(String(body.packageId ?? ""));
     if (!pkg) return json({ error: "Unknown credit package." }, 400);
-    const blockchain = String(body.blockchain || "ethereum");
+    // Chain codes are validated against the provider's list rather than passed
+    // through: an unsupported value would fail at the API with an opaque error.
+    const blockchain = String(body.blockchain || DEFAULT_CHAIN);
+    if (!isSupportedChain(blockchain)) {
+      return json({ error: "Unsupported payment chain.", chains: SUPPORTED_CHAINS }, 400);
+    }
 
     try {
       const payment = await coinpay.createPayment({
@@ -141,7 +152,7 @@ export async function handleCreditsRoute(
         // Only our own identifiers, never anything user-supplied: this metadata
         // comes back on the webhook.
         metadata: { user_id: user.id, package_id: pkg.id, credits: String(pkg.credits) },
-        webhookUrl: `${deps.appUrl.replace(/\/$/, "")}/api/credits/webhook`,
+        webhookUrl: `${deps.appUrl.replace(/\/$/, "")}${WEBHOOK_PATH}`,
         redirectUrl: `${deps.appUrl.replace(/\/$/, "")}/?credits=pending`,
       });
 
@@ -159,6 +170,10 @@ export async function handleCreditsRoute(
         ok: true,
         paymentId: payment.paymentId,
         paymentUrl: payment.paymentUrl,
+        paymentAddress: payment.paymentAddress,
+        cryptoAmount: payment.cryptoAmount,
+        cryptoCurrency: payment.cryptoCurrency,
+        expiresAt: payment.expiresAt,
         credits: pkg.credits,
         amountUsd: pkg.usd,
       });

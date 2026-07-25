@@ -17,6 +17,23 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_BASE_URL = "https://coinpayportal.com/api";
 
+/**
+ * Chain codes CoinPayPortal accepts. These are symbol-style codes ("ETH",
+ * "USDC_ETH") — not chain names like "ethereum", which the API rejects.
+ * Fetched live from /supported-coins on 2026-07-24.
+ */
+export const SUPPORTED_CHAINS = [
+  "BTC", "ETH", "SOL", "POL", "BNB", "ADA", "BCH", "DOGE",
+  "USDC_ETH", "USDC_POL", "USDC_SOL", "USDT_ETH", "USDT_POL", "USDT_SOL",
+] as const;
+
+/** Stablecoin on a low-fee chain: predictable amount, cheap to send. */
+export const DEFAULT_CHAIN = "USDC_POL";
+
+export function isSupportedChain(chain: string): boolean {
+  return (SUPPORTED_CHAINS as readonly string[]).includes(chain);
+}
+
 /** Replay window for webhook timestamps, in seconds. */
 export const SIGNATURE_TOLERANCE_SECONDS = 300;
 
@@ -38,7 +55,13 @@ export interface CreatePaymentInput {
 
 export interface CreatedPayment {
   paymentId: string;
+  /** Hosted checkout page. */
   paymentUrl: string;
+  /** On-chain destination, so the UI can show pay-by-address as a fallback. */
+  paymentAddress?: string;
+  cryptoAmount?: string;
+  cryptoCurrency?: string;
+  expiresAt?: string;
   raw: unknown;
 }
 
@@ -80,9 +103,20 @@ export class CoinPayClient {
     }
     const payment = body.payment ?? body.data ?? body;
     const paymentId = String(payment?.id ?? payment?.payment_id ?? "");
-    const paymentUrl = String(body.payment_url ?? body.paymentUrl ?? payment?.payment_url ?? "");
     if (!paymentId) throw new Error("CoinPayPortal returned no payment id");
-    return { paymentId, paymentUrl, raw: body };
+    // The API returns no hosted-page URL; the portal serves one at /pay/<id>.
+    // The on-chain address is carried through as well so the UI can fall back
+    // to showing address + amount if the hosted page is ever unavailable.
+    const portalUrl = this.baseUrl.replace(/\/api\/?$/, "");
+    return {
+      paymentId,
+      paymentUrl: `${portalUrl}/pay/${paymentId}`,
+      paymentAddress: payment?.payment_address ? String(payment.payment_address) : undefined,
+      cryptoAmount: payment?.crypto_amount != null ? String(payment.crypto_amount) : undefined,
+      cryptoCurrency: payment?.crypto_currency ? String(payment.crypto_currency) : undefined,
+      expiresAt: payment?.expires_at ? String(payment.expires_at) : undefined,
+      raw: body,
+    };
   }
 
   async getPayment(paymentId: string): Promise<Record<string, unknown>> {
