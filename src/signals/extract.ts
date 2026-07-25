@@ -27,22 +27,37 @@ interface Rule {
   patterns: RegExp[];
 }
 
+/**
+ * Determiner slot shared by the rules below.
+ *
+ * The taxonomy was written against executive speech ("we raised our guidance"),
+ * so every pattern hard-coded "our". Reporting says "Vistra raised its
+ * guidance" or "the company lifted full-year guidance", and news documents were
+ * therefore matching almost nothing. Optional and non-capturing, so it changes
+ * nothing about how transcripts match.
+ */
+const DET = String.raw`(?:(?:our|its|their|his|her|the|this)\s+)?`;
+const FY = String.raw`(?:(?:full[- ]year|fiscal|fy|annual|quarterly|q[1-4])\s+)?`;
+/** `raised its full-year guidance`, `raising guidance`, `raise our outlook`. */
+const rule = (verb: string, object: string) =>
+  new RegExp(String.raw`\b${verb}\s+${DET}${FY}${object}\b`, "i");
+
 // PRD §10.1 (positive) and §10.2 (negative) taxonomies.
 const RULES: Rule[] = [
-  { signalType: "raised_guidance", direction: "positive", weight: 0.9, patterns: [/rais(?:e|ed|ing) (?:our |full[- ]year |fy)?guidance/i, /increas(?:e|ed|ing) (?:our )?outlook/i, /guidance (?:up|higher|to)/i] },
+  { signalType: "raised_guidance", direction: "positive", weight: 0.9, patterns: [rule(String.raw`(?:raise[sd]?|raising)`, String.raw`guidance`), rule(String.raw`(?:increase[sd]?|increasing|raise[sd]?|raising|lift(?:s|ed|ing)?|boost(?:s|ed|ing)?|hike[sd]?|hiking)`, String.raw`(?:outlook|guidance|forecast)`), /guidance (?:up|higher|to)/i, /guidance (?:was|were|has been) (?:raised|increased|lifted)/i] },
   { signalType: "demand_acceleration", direction: "positive", weight: 0.85, patterns: [/demand (?:is )?(?:accelerat|strengthen|surg)/i, /accelerating demand/i, /record demand/i] },
   { signalType: "backlog_growth", direction: "positive", weight: 0.85, patterns: [/backlog (?:grew|increased|of|up|record)/i, /remaining performance obligation/i, /\bRPO\b/, /order (?:book|backlog)/i] },
-  { signalType: "capacity_expansion", direction: "positive", weight: 0.7, patterns: [/expand(?:ing)? (?:our )?capacity/i, /new (?:facility|plant|data ?center|fab)/i, /(?:bringing|adding) .{0,20}capacity online/i, /\b\d+\s?MW\b/i] },
-  { signalType: "customer_win", direction: "positive", weight: 0.8, patterns: [/(?:new|major|large|key) (?:customer|client) (?:win|won|deal|contract)/i, /landed (?:a )?(?:new )?customer/i, /signed (?:a )?(?:new |major )?(?:agreement|contract|deal)/i] },
+  { signalType: "capacity_expansion", direction: "positive", weight: 0.7, patterns: [rule(String.raw`expand(?:s|ed|ing)?`, String.raw`capacity`),/new (?:facility|plant|data ?center|fab)/i, /(?:bringing|adding) .{0,20}capacity online/i, /\b\d+\s?MW\b/i] },
+  { signalType: "customer_win", direction: "positive", weight: 0.8, patterns: [/(?:new|major|large|key) (?:customer|client) (?:win|won|deal|contract)/i, /landed (?:a )?(?:new )?customer/i, /signed (?:a )?(?:new |major )?(?:agreement|contract|deal)/i, /(?:won|secured|awarded|booked) (?:a |an )?(?:new |major |large |multi[- ]year )*(?:contract|order|deal|customer)/i] },
   { signalType: "commercial_launch", direction: "positive", weight: 0.8, patterns: [/commercial (?:launch|availability|production)/i, /general(?:ly)? available/i, /moving (?:from pilot )?to (?:commercial|production)/i, /entered (?:full )?production/i] },
   { signalType: "regulatory_milestone", direction: "positive", weight: 0.85, patterns: [/(?:FDA|regulatory) (?:approval|clearance|authorization)/i, /received (?:approval|clearance)/i, /510\(k\)/i, /CE mark/i] },
-  { signalType: "margin_expansion", direction: "positive", weight: 0.75, patterns: [/(?:gross|operating) margin (?:expan|improv|increas|up)/i, /margin(?:s)? (?:expanded|improved)/i] },
+  { signalType: "margin_expansion", direction: "positive", weight: 0.75, patterns: [/(?:gross|operating) margin (?:expan|improv|increas|up)/i, /margin(?:s)? (?:expanded|improved|widened|rose)/i] },
   { signalType: "cashflow_improvement", direction: "positive", weight: 0.8, patterns: [/positive (?:free )?cash flow/i, /cash flow (?:positive|breakeven|improv)/i, /reduc(?:e|ed|ing) (?:cash )?burn/i, /profitab(?:le|ility)/i] },
   { signalType: "strategic_partnership", direction: "positive", weight: 0.7, patterns: [/strategic (?:partnership|alliance|agreement)/i, /partner(?:ed|ship) with/i, /collaboration with/i] },
   { signalType: "pricing_power", direction: "positive", weight: 0.7, patterns: [/pricing power/i, /(?:raised|increased) prices/i, /price (?:increase|realization)/i] },
   { signalType: "new_recurring_revenue", direction: "positive", weight: 0.75, patterns: [/recurring revenue/i, /\bARR\b/, /subscription (?:revenue|growth)/i] },
 
-  { signalType: "guidance_reduction", direction: "negative", weight: 0.9, patterns: [/(?:lower|reduc|cut)(?:ed|ing)? (?:our )?guidance/i, /guidance (?:down|lower|below)/i, /reduc(?:e|ed|ing) (?:our )?outlook/i] },
+  { signalType: "guidance_reduction", direction: "negative", weight: 0.9, patterns: [rule(String.raw`(?:lower(?:s|ed|ing)?|reduce[sd]?|reducing|cuts?|cutting|slash(?:es|ed|ing)?|trim(?:s|med|ming)?)`, String.raw`(?:guidance|outlook|forecast)`), /guidance (?:down|lower|below)/i, /guidance (?:was|were|has been) (?:cut|lowered|reduced)/i] },
   { signalType: "cash_burn", direction: "negative", weight: 0.8, patterns: [/cash burn/i, /burn rate/i, /using cash/i] },
   { signalType: "financing_need", direction: "negative", weight: 0.85, patterns: [/(?:need|require) (?:additional )?(?:capital|financing|funding)/i, /raise (?:additional )?capital/i, /going concern/i] },
   { signalType: "atm_offering", direction: "negative", weight: 0.85, patterns: [/at[- ]the[- ]market (?:offering|program)/i, /\bATM\b (?:offering|program|facility)/i] },

@@ -92,6 +92,50 @@ export async function buildEvidence(
     if (url) noteIssuer(hostOf(url), tier);
   }
 
+  // Recent coverage that produced no rule-based signal.
+  //
+  // Extraction is deliberately narrow — it only fires on the §10 taxonomy — so
+  // an article reporting a partnership in prose the rules do not match was
+  // invisible to the model even after being ingested. The headline, publisher
+  // and date are facts we hold and can cite, so they are offered as evidence in
+  // their own right, clearly labelled as coverage rather than as an executive
+  // statement. Tier 3 (promotional) is excluded: it carries no weight anywhere
+  // else and should not reach the model as a headline either.
+  try {
+    const news = await db.execute({
+      sql: `SELECT d.id, d.title, d.url, d.publisher, d.published_at, d.source_tier, d.paywalled
+            FROM documents d JOIN transcripts t ON t.document_id = d.id
+            WHERE t.primary_ticker = ?
+              AND d.provider_id = 'news'
+              AND COALESCE(d.source_tier, 3) < 3
+              AND (? IS NULL OR COALESCE(d.published_at, '') >= ?)
+              AND (? IS NULL OR COALESCE(d.published_at, '') <= ?)
+            ORDER BY d.published_at DESC
+            LIMIT 15`,
+      args: [ticker, opts.from ?? null, opts.from ?? null, opts.to ?? null, opts.to ?? null],
+    });
+    for (const row of news.rows) {
+      const url = String(row.url ?? "");
+      const publisher = String(row.publisher ?? hostOf(url));
+      const date = String(row.published_at ?? "").slice(0, 10);
+      // "Headline" is the operative word: a headline is not a quote, and the
+      // model must not treat it as one.
+      const text = `[${date}] ${publisher} (headline${row.paywalled ? ", headline only" : ""}): ${row.title}`;
+      items.push({
+        id: `news:${String(row.id)}`,
+        kind: "news",
+        ticker,
+        sourceUrl: url || undefined,
+        text,
+        hash: hashText(text),
+        observedAt: date,
+      });
+      if (url) noteIssuer(hostOf(url), Number(row.source_tier ?? 2));
+    }
+  } catch {
+    /* coverage is an enrichment; its absence never fails an analysis */
+  }
+
   // Cross-source corroboration (PRD v3 §3.4). Each confirming publisher is an
   // independent issuer for scoring purposes; amplification-only links are shown
   // to the model but contribute no weight.

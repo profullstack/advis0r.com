@@ -148,6 +148,122 @@ export function resetTickerVocabulary(): void {
   cachedVocabulary = null;
 }
 
+/**
+ * Capitalized tokens that are not company names. Sentence-initial words are
+ * excluded separately, so this only needs to cover words that appear mid-
+ * sentence: calendar terms, market vocabulary, and the regulator/exchange names
+ * that show up in almost every article.
+ */
+const NOT_COMPANY_WORDS = new Set(
+  [
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday",
+    "wall", "street", "nasdaq", "nyse", "sec", "fda", "ceo", "cfo", "coo", "cto",
+    "u.s.", "us", "america", "american", "european", "china", "chinese", "india",
+    "ai", "the", "a", "an", "it", "its", "they", "their", "he", "she", "this",
+    "that", "these", "those", "we", "our", "but", "and", "however", "meanwhile",
+    "q1", "q2", "q3", "q4", "fy", "gaap", "ebitda", "eps", "arr", "rpo",
+    "shares", "stock", "revenue", "earnings", "guidance", "results", "analysts",
+    "investors", "both", "according", "while", "after", "before", "meanwhile",
+  ].map((w) => w.toLowerCase()),
+);
+
+/**
+ * Verbs that mark the word before them as a speaking subject — "IonQ said",
+ * "Rigetti reported". Used to judge a sentence-initial capital, where
+ * capitalization alone carries no information.
+ */
+const REPORTING_VERBS =
+  /^(said|says|reported|reports|announced|announces|posted|guided|expects?|expected|plans?|raised|cut|added|noted|warned|filed|launched|acquired|agreed|declined|rose|fell)$/i;
+
+/** Anaphoric references that stand in for a company already named. */
+const ANAPHORA =
+  /\b(the company|the firm|the business|the stock|the shares|shares|management|it|its|they|their)\b/i;
+
+/**
+ * Proper nouns in a sentence that are not the subject and not ordinary
+ * vocabulary — i.e. probable other companies or people.
+ *
+ * The first token needs its own rule: every sentence capitalizes it, so a
+ * capital there proves nothing, but the most common way to name a rival is to
+ * open with it ("IonQ said…"). It counts only when the word is distinctive on
+ * its own — an internal capital or hyphenated capital, as in "IonQ", "D-Wave",
+ * "PayPal" — or when a reporting verb follows it.
+ */
+export function otherProperNouns(sentence: string, allowedTerms: string[]): string[] {
+  const allowed = allowedTerms.map((t) => t.toLowerCase()).filter(Boolean);
+  const trimmed = sentence.trimStart();
+  const tokens = [...trimmed.matchAll(/\b[A-Z][A-Za-z0-9&.'-]+\b/g)];
+  const out: string[] = [];
+  for (const m of tokens) {
+    const raw = m[0]!;
+    const lower = raw.toLowerCase();
+    if (NOT_COMPANY_WORDS.has(lower)) continue;
+    if (allowed.some((t) => t.includes(lower) || lower.includes(t))) continue;
+    if ((m.index ?? 0) === 0) {
+      const distinctive = /[A-Z]/.test(raw.slice(1)) || /-[A-Z]/.test(raw);
+      const next = trimmed.slice(raw.length).trimStart().split(/\s+/)[0] ?? "";
+      if (!distinctive && !REPORTING_VERBS.test(next.replace(/[^A-Za-z]/g, ""))) continue;
+    }
+    out.push(raw);
+  }
+  return out;
+}
+
+/**
+ * Sentence-stream attribution test for multi-company documents.
+ *
+ * `makeSubjectMentionTest` is stateless and per-sentence, which is right for
+ * filings but discards most of a news article: reporting names the company once
+ * and then writes "the company", "it", "shares" — and those sentences are the
+ * ones carrying the signal. Production shows the cost: 18 ingested articles
+ * yielded 2 signals.
+ *
+ * This variant walks the sentences in order and carries one bit of state —
+ * whether the subject is the company currently under discussion:
+ *
+ *   - a sentence naming the subject is attributed to it, and opens a run;
+ *   - a sentence naming another known issuer closes the run;
+ *   - an unnamed sentence continues the run only if it is anaphoric ("it
+ *     raised its outlook") *and* introduces no other proper noun.
+ *
+ * The bias stays conservative in the same direction as before: any doubt about
+ * who a sentence is about ends the run rather than attributing it. A missed
+ * signal costs coverage; a misattributed one corrupts the evidence base.
+ */
+export function makeSubjectAttributionTest(
+  terms: string[],
+  subject: string,
+  knownTickers: Set<string>,
+): (sentence: string) => boolean {
+  const namesSubject = makeSubjectMentionTest(terms);
+  const subjectUpper = subject.toUpperCase();
+  const allowed = [...terms, subject];
+  let onSubject = false;
+
+  return (sentence: string) => {
+    if (namesSubject(sentence)) {
+      onSubject = true;
+      return true;
+    }
+    const namesOtherTicker = [...candidateTickers(sentence)].some(
+      (t) => t !== subjectUpper && knownTickers.has(t),
+    );
+    if (namesOtherTicker) {
+      onSubject = false;
+      return false;
+    }
+    // Another company spelled out ("IonQ", "Quantinuum") never reaches the
+    // ticker vocabulary, so an unrecognized proper noun also ends the run.
+    if (otherProperNouns(sentence, allowed).length > 0) {
+      onSubject = false;
+      return false;
+    }
+    return onSubject && ANAPHORA.test(sentence);
+  };
+}
+
 /** Build the sentence-level predicate used by `extractSignals`. */
 export function makeSubjectMentionTest(terms: string[]): (sentence: string) => boolean {
   const lowered = terms.map((t) => t.toLowerCase()).filter((t) => t.length >= 2);

@@ -388,7 +388,7 @@ export interface AnalysisRequest {
 
 export interface EvidenceItem {
   id: string;
-  kind: "transcript" | "market" | "fundamental" | "filing" | "technical";
+  kind: "transcript" | "market" | "fundamental" | "filing" | "technical" | "news";
   ticker: string;
   sourceUrl?: string;
   text: string;

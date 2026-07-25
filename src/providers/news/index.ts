@@ -23,7 +23,7 @@ import type {
 } from "../../types.ts";
 import { BaseTranscriptProvider, segmentText } from "../transcripts/base.ts";
 import { fetchArticle } from "./article.ts";
-import { fetchFeed, googleNewsFeed, yahooTickerFeed, WIRE_FEEDS } from "./rss.ts";
+import { bingNewsFeed, fetchFeed, googleNewsFeed, yahooTickerFeed, WIRE_FEEDS } from "./rss.ts";
 import { isPromotionalHost, tierFor } from "./tiers.ts";
 import { ValueSerpNewsClient, type NewsHit } from "./valueserp.ts";
 
@@ -36,6 +36,34 @@ export interface NewsProviderOptions {
   perTicker?: number;
   /** Skip tier-3 sources entirely (they are ingested by default, weight 0). */
   excludeTier3?: boolean;
+  /**
+   * Require the headline to name the subject company. On by default: a
+   * per-ticker feed carries a lot of syndicated market commentary that merely
+   * appears alongside the ticker (see `isAboutSubject`).
+   */
+  requireSubject?: boolean;
+}
+
+/**
+ * Is this hit actually about the subject company?
+ *
+ * Yahoo's per-ticker feed and Google News both return general market pieces
+ * next to real coverage — a run for NVDA returned articles about Amazon,
+ * Micron, Enphase and the Fed. Ingesting those is worse than useless: the
+ * subject guard then has to block nearly every sentence, and any article that
+ * happens to look single-company gets its signals attributed to the wrong
+ * ticker. Requiring the headline to name the company keeps the corpus on
+ * topic.
+ */
+export function isAboutSubject(
+  hit: { title?: string; snippet?: string },
+  ticker: string,
+  companyName?: string,
+): boolean {
+  // Headline only. Snippets summarize the article and routinely name several
+  // companies, so including them re-admitted exactly the pieces this filter
+  // exists to reject ("Supermicro Stock Just Jumped 20%…" for NVDA).
+  return mentionsTicker(hit.title ?? "", ticker, companyName);
 }
 
 export class NewsProvider extends BaseTranscriptProvider {
@@ -70,6 +98,7 @@ export class NewsProvider extends BaseTranscriptProvider {
 
     for (const ticker of tickers) {
       const hits: NewsHit[] = [];
+      const name = this.companyNames.get(ticker);
 
       // 1. Keyless per-ticker headline feed — cheapest broad coverage.
       try {
@@ -79,9 +108,21 @@ export class NewsProvider extends BaseTranscriptProvider {
         /* a dead feed degrades the run, it does not fail it */
       }
 
-      // 2. Keyless Google News query.
-      const name = this.companyNames.get(ticker);
       const q = name ? `"${name}" ${ticker}` : `${ticker} stock`;
+
+      // 2. Keyless Bing News query. Ranked ahead of Google News because its
+      // links resolve to the publisher: these are the hits that yield article
+      // bodies rather than headlines, and the per-ticker cap is spent in order.
+      try {
+        const items = await fetchFeed(bingNewsFeed(q));
+        hits.push(...items.map((i) => ({ ...i, tier: tierFor(i.url) })));
+      } catch {
+        /* best effort */
+      }
+
+      // 3. Keyless Google News query. Broadest recall, but its links are
+      // interstitials that serve a JavaScript redirect, so these documents
+      // usually land headline-only.
       try {
         const items = await fetchFeed(googleNewsFeed(q));
         hits.push(...items.map((i) => ({ ...i, tier: tierFor(i.url) })));
@@ -89,7 +130,7 @@ export class NewsProvider extends BaseTranscriptProvider {
         /* best effort */
       }
 
-      // 3. Metered ValueSERP — richer, dated, and already paid for.
+      // 4. Metered ValueSERP — richer, dated, and already paid for.
       if (this.serp.configured) {
         try {
           hits.push(...(await this.serp.search(q, asOf)));
@@ -105,6 +146,7 @@ export class NewsProvider extends BaseTranscriptProvider {
         const tier = hit.tier;
         if (this.options.excludeTier3 && tier === 3) continue;
         if (query.from && hit.publishedAt && hit.publishedAt < query.from.slice(0, 10)) continue;
+        if (this.options.requireSubject !== false && !isAboutSubject(hit, ticker, name)) continue;
 
         byUrl.set(hit.url, this.toDocument(hit, ticker, tier));
         kept++;

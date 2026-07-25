@@ -15,18 +15,21 @@ import {
   tierLabel,
 } from "../src/providers/news/tiers.ts";
 import { parseNewsResults, resolveDate } from "../src/providers/news/valueserp.ts";
-import { parseRss, googleNewsFeed, yahooTickerFeed } from "../src/providers/news/rss.ts";
+import { parseRss, bingNewsFeed, googleNewsFeed, unwrapRedirect, yahooTickerFeed } from "../src/providers/news/rss.ts";
 import {
   extractArticleText,
   isAllowedByRobots,
   parseRobots,
 } from "../src/providers/news/article.ts";
-import { mentionsTicker } from "../src/providers/news/index.ts";
+import { isAboutSubject, mentionsTicker } from "../src/providers/news/index.ts";
 import {
   isMultiCompany,
+  makeSubjectAttributionTest,
   makeSubjectMentionTest,
+  otherProperNouns,
   subjectTerms,
 } from "../src/signals/subject.ts";
+import { extractSignals } from "../src/signals/extract.ts";
 import { TIER_WEIGHTS, weightedIssuerCount } from "../src/evidence/builder.ts";
 
 describe("source tiering", () => {
@@ -255,6 +258,61 @@ describe("wire headline matching", () => {
   });
 });
 
+describe("discovery relevance and link unwrapping", () => {
+  test("a headline naming the company is kept", () => {
+    expect(isAboutSubject({ title: "Nvidia (NVDA) expands AI reach" }, "NVDA", "NVIDIA CORP")).toBe(true);
+    expect(isAboutSubject({ title: "Vistra Corp. beats on earnings" }, "VST", "Vistra Corp.")).toBe(true);
+  });
+
+  test("syndicated filler in a ticker feed is dropped", () => {
+    // Both were really ingested for NVDA before this filter existed.
+    expect(isAboutSubject({ title: "Supermicro Stock Just Jumped 20%." }, "NVDA", "NVIDIA CORP")).toBe(false);
+    expect(
+      isAboutSubject({ title: "1 Reason to Buy Amazon Stock Before July 30" }, "NVDA", "NVIDIA CORP"),
+    ).toBe(false);
+  });
+
+  test("a snippet naming the company does not rescue an off-topic headline", () => {
+    expect(
+      isAboutSubject(
+        { title: "Supermicro Stock Just Jumped 20%.", snippet: "…buying Nvidia instead…" },
+        "NVDA",
+        "NVIDIA CORP",
+      ),
+    ).toBe(false);
+  });
+
+  test("redirect wrappers resolve to the publisher URL", () => {
+    const wrapped =
+      "http://www.bing.com/news/apiclick.aspx?ref=FexRss&url=https%3a%2f%2fwww.fxempire.com%2fforecasts%2farticle%2fnvda-1612742&c=12";
+    expect(unwrapRedirect(wrapped)).toBe("https://www.fxempire.com/forecasts/article/nvda-1612742");
+  });
+
+  test("a direct URL is returned untouched, and junk never throws", () => {
+    expect(unwrapRedirect("https://finance.yahoo.com/news/x.html")).toBe("https://finance.yahoo.com/news/x.html");
+    expect(unwrapRedirect("not a url")).toBe("not a url");
+    // A wrapper carrying a non-http payload must not be trusted.
+    expect(unwrapRedirect("https://x.test/r?url=javascript%3Aalert(1)")).toBe("https://x.test/r?url=javascript%3Aalert(1)");
+  });
+
+  test("parsed feed items carry the unwrapped link and its publisher host", () => {
+    const xml = `<rss><channel><item>
+      <title>Nvidia (NVDA) ships H200</title>
+      <link>http://www.bing.com/news/apiclick.aspx?ref=FexRss&amp;url=https%3a%2f%2fwww.reuters.com%2ftech%2fnvda-h200&amp;c=1</link>
+      <pubDate>Wed, 22 Jul 2026 10:00:00 GMT</pubDate>
+    </item></channel></rss>`;
+    const [item] = parseRss(xml);
+    expect(item!.url).toBe("https://www.reuters.com/tech/nvda-h200");
+    expect(item!.host).toBe("reuters.com");
+  });
+
+  test("the Bing feed is a plain keyless query URL", () => {
+    expect(bingNewsFeed(`"NVIDIA CORP" NVDA`)).toBe(
+      "https://www.bing.com/news/search?q=%22NVIDIA%20CORP%22%20NVDA&format=RSS",
+    );
+  });
+});
+
 describe("multi-company subject guard (PRD §8.4)", () => {
   const known = new Set(["QBTS", "IONQ", "RGTI", "VST"]);
 
@@ -292,5 +350,85 @@ describe("multi-company subject guard (PRD §8.4)", () => {
 
   test("an empty term list never blocks (fails open, not silently empty)", () => {
     expect(makeSubjectMentionTest([])("anything")).toBe(true);
+  });
+});
+
+describe("subject attribution across a news article's sentence stream", () => {
+  const known = new Set(["QBTS", "IONQ", "RGTI", "VST"]);
+  const terms = subjectTerms("QBTS", "D-Wave Quantum Inc.");
+  const attribute = () => makeSubjectAttributionTest(terms, "QBTS", known);
+
+  test("carries the subject through anaphoric sentences", () => {
+    const at = attribute();
+    expect(at("D-Wave reported second-quarter bookings this morning.")).toBe(true);
+    // The sentence that actually carries the signal names nobody — this is the
+    // shape that made news ingestion produce almost no signals.
+    expect(at("The company raised its full-year guidance on stronger demand.")).toBe(true);
+    expect(at("It also expanded its capacity in Palo Alto.")).toBe(false); // names a place
+  });
+
+  test("a rival named by ticker ends the run", () => {
+    const at = attribute();
+    expect(at("QBTS shares rose after the announcement.")).toBe(true);
+    expect(at("IONQ, meanwhile, guided lower for the quarter.")).toBe(false);
+    // Still blocked: the run belongs to the rival now, not the subject.
+    expect(at("The company reduced its outlook accordingly.")).toBe(false);
+  });
+
+  test("a rival named only by brand also ends the run — the production defect", () => {
+    const at = attribute();
+    expect(at("D-Wave reported remaining performance obligations of $42.4 million.")).toBe(true);
+    // "IonQ" never appears in the ticker vocabulary, so the proper-noun guard is
+    // what has to catch it. Recording this $470M RPO as a QBTS backlog signal is
+    // the exact bug the guard exists to prevent.
+    expect(
+      at("IonQ also remains fundamentally strong, supported by a $470 million RPO."),
+    ).toBe(false);
+    expect(at("The company said it would raise capital.")).toBe(false);
+  });
+
+  test("an unnamed sentence before the subject is ever named is not attributed", () => {
+    const at = attribute();
+    expect(at("Quantum computing stocks have been volatile all year.")).toBe(false);
+  });
+
+  test("otherProperNouns ignores the sentence-initial word and ordinary vocabulary", () => {
+    expect(otherProperNouns("The company raised its guidance in July.", ["qbts", "d-wave"])).toEqual([]);
+    expect(otherProperNouns("Shares fell after Nvidia reported.", ["qbts"])).toContain("Nvidia");
+  });
+});
+
+describe("signal rules match reported speech, not just executive speech", () => {
+  const article = (text: string) =>
+    extractSignals({
+      id: "d1", providerId: "news", title: "t", url: "https://example.com/a",
+      eventType: "news_article", tickers: ["VST"], localPath: "/tmp/x", contentType: "text/plain",
+      checksum: "c", fetchedAt: "2026-07-25T00:00:00.000Z",
+      segments: [{ index: 0, text }],
+      eventDate: "2026-07-25", primaryTicker: "VST", language: "en",
+    } as never);
+
+  test("third-person guidance raises are extracted", () => {
+    const types = article("Vistra raised its full-year guidance to $6.5 billion on Thursday.")
+      .map((s) => s.signalType);
+    expect(types).toContain("raised_guidance");
+  });
+
+  test("third-person guidance cuts are extracted", () => {
+    const types = article("The company cut its full-year outlook by 12% after the outage.")
+      .map((s) => s.signalType);
+    expect(types).toContain("guidance_reduction");
+  });
+
+  test("reported contract wins are extracted", () => {
+    const types = article("Vistra won a multi-year contract worth $400 million with a hyperscaler.")
+      .map((s) => s.signalType);
+    expect(types).toContain("customer_win");
+  });
+
+  test("first-person transcript phrasing still matches (no regression)", () => {
+    const types = article("We are raising our guidance for the full year to $6.5 billion.")
+      .map((s) => s.signalType);
+    expect(types).toContain("raised_guidance");
   });
 });

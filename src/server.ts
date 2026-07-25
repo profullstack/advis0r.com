@@ -20,6 +20,7 @@ import { loadConfig } from "./config.ts";
 import { getDb, migrate } from "./db/index.ts";
 import { buildRegistry, getAiProvider } from "./registry.ts";
 import { analyzeTicker } from "./pipeline/analyze.ts";
+import { refreshTickerNews } from "./pipeline/news-refresh.ts";
 import { calculateIndicators, scoreTechnicalSetup } from "./technical/indicators.ts";
 import { buildEvidence } from "./evidence/builder.ts";
 import { composeScore, classifyRisk } from "./scoring/score.ts";
@@ -153,7 +154,8 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
   // Group evidence by source document → per-transcript/video "what they said"
   // summary, with links and (for videos) an embeddable player.
   const docsRs = await db.execute({
-    sql: `SELECT d.url, d.title, d.event_type, d.published_at
+    sql: `SELECT d.url, d.title, d.event_type, d.published_at, d.publisher, d.source_tier,
+                 d.provider_id
           FROM documents d JOIN transcripts t ON t.document_id = d.id
           WHERE t.primary_ticker = ?`,
     args: [sym],
@@ -165,6 +167,14 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     if (!u) continue;
     (byUrl.get(u) ?? byUrl.set(u, []).get(u)!).push(s);
   }
+  // Coverage that produced no extracted signal still belongs in the list.
+  // Grouping strictly by signal meant an ingested article with no rule match
+  // was invisible — the app looked like it had aggregated nothing at all.
+  for (const [url, doc] of docByUrl) {
+    if (doc.provider_id !== "news" || byUrl.has(url)) continue;
+    byUrl.set(url, []);
+  }
+
   const sources = [...byUrl.entries()]
     .map(([url, sigs]) => {
       const doc: any = docByUrl.get(url) ?? {};
@@ -176,6 +186,8 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
         title: doc.title ?? url,
         eventType: doc.event_type ?? "document",
         publishedAt: doc.published_at ?? sigs[0]?.event_date ?? null,
+        publisher: doc.publisher ?? null,
+        sourceTier: doc.source_tier ?? null,
         kind: cls.kind,
         embedUrl: cls.embedUrl,
         direct: cls.direct ?? false,
@@ -218,7 +230,10 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
 function classifySource(
   url: string,
   eventType: string,
-): { kind: "transcript" | "video" | "audio"; embedUrl?: string; direct?: boolean } {
+): { kind: "transcript" | "video" | "audio" | "news"; embedUrl?: string; direct?: boolean } {
+  // News and press releases are neither transcripts nor media; labelling them
+  // "Transcript" in the UI is why ingested coverage looked like it was missing.
+  if (eventType === "news_article" || eventType === "press_release") return { kind: "news" };
   const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|live\/)|youtu\.be\/)([\w-]{6,})/i);
   if (yt) return { kind: "video", embedUrl: `https://www.youtube.com/embed/${yt[1]}` };
   const vim = url.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
@@ -456,6 +471,20 @@ const server = Bun.serve({
             send("status", { message: `Analyzing ${ticker}`, providers: order });
             let lastErr = "no analysis produced";
             try {
+              // Aggregate current news before the model sees the evidence.
+              // Keyless RSS only and deadlined, so an interactive click never
+              // spends search credits or hangs on a slow publisher.
+              const news = await refreshTickerNews(db, config, ticker, {
+                onProgress: (message) => send("stage", { stage: "news", message }),
+                deadlineMs: 25_000,
+              });
+              send("stage", {
+                stage: "news",
+                message: news.ran
+                  ? `News ready — ${news.documents} new article(s), ${news.known} indexed for ${ticker}`
+                  : `News ready — ${news.known} article(s) indexed for ${ticker}`,
+                done: true,
+              });
               for (const prov of order) {
                 if (!registry.ai.has(prov)) continue;
                 send("provider", { provider: prov, message: `Trying ${prov}` });
@@ -534,6 +563,9 @@ const server = Bun.serve({
             ? [requested, ...all.filter((x) => x !== requested)]
             : [config.ai.defaultProvider, ...all.filter((x) => x !== config.ai.defaultProvider)];
         const model = url.searchParams.get("model") ?? "balanced";
+        // Same news top-up as the streaming path — this route just has no
+        // channel to report it on.
+        await refreshTickerNews(db, config, symbol.toUpperCase(), { deadlineMs: 25_000 });
         let lastErr = "no analysis produced";
         for (const prov of order) {
           if (!registry.ai.has(prov)) continue;

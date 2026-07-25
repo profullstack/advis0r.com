@@ -15,7 +15,7 @@ import { loadBoilerplateShingles, makeRepeatTest } from "../signals/corpus.ts";
 import {
   isMultiCompany,
   loadTickerVocabulary,
-  makeSubjectMentionTest,
+  makeSubjectAttributionTest,
   subjectTerms,
 } from "../signals/subject.ts";
 import type { SourceTier, TranscriptQuery } from "../types.ts";
@@ -104,9 +104,16 @@ export async function ingest(
         const multiCompany =
           ticker.length > 0 && isMultiCompany(fullText, ticker, knownTickers);
         if (multiCompany) result.multiCompanyGuarded += 1;
+        // The attribution test carries the subject across anaphoric sentences
+        // ("it raised its outlook"), which a per-sentence name check drops —
+        // the difference between a news article yielding signals and yielding
+        // almost none. It still ends the run the moment another company is
+        // named, so the IONQ/QBTS misattribution stays blocked.
         const mentionsSubject = multiCompany
-          ? makeSubjectMentionTest(
+          ? makeSubjectAttributionTest(
               subjectTerms(ticker, (doc.meta?.companyName as string | undefined) ?? undefined),
+              ticker,
+              knownTickers,
             )
           : undefined;
 

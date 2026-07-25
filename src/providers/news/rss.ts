@@ -41,6 +41,38 @@ export function googleNewsFeed(query: string, window = "7d"): string {
   return `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
 }
 
+/**
+ * Bing News query feed.
+ *
+ * Worth having alongside Google News for one concrete reason: Google's RSS
+ * links point at `news.google.com` interstitials that serve a JavaScript
+ * redirect, so the article body can never be fetched and every document lands
+ * headline-only. Bing wraps its links too, but puts the real publisher URL in a
+ * `url=` parameter that `unwrapRedirect` decodes — which is the difference
+ * between a headline and an article we can actually extract signals from.
+ */
+export function bingNewsFeed(query: string): string {
+  return `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&format=RSS`;
+}
+
+/**
+ * Resolve a redirect wrapper to the publisher URL it carries.
+ *
+ * Only decodes what is already in the link — it never follows a redirect, so it
+ * costs no request and cannot be led somewhere unexpected.
+ */
+export function unwrapRedirect(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const inner = parsed.searchParams.get("url") ?? parsed.searchParams.get("u");
+    if (!inner) return url;
+    const decoded = decodeURIComponent(inner);
+    return /^https?:\/\//i.test(decoded) ? decoded : url;
+  } catch {
+    return url;
+  }
+}
+
 /** Newswire feeds — tier 0 primary sources (issuers speaking directly). */
 export const WIRE_FEEDS: { publisher: string; url: string }[] = [
   {
@@ -79,8 +111,11 @@ export function parseRss(xml: string): RssItem[] {
   const blocks = xml.match(/<(item|entry)\b[\s\S]*?<\/\1>/gi) ?? [];
   for (const block of blocks) {
     const title = decodeXml(pick(block, "title") ?? "");
-    const link = extractLink(block);
-    if (!link) continue;
+    const rawLink = extractLink(block);
+    if (!rawLink) continue;
+    // Tier and host must be judged on the publisher, not on the aggregator that
+    // wrapped the link.
+    const link = unwrapRedirect(rawLink);
     const host = normalizeHost(link);
     const pub =
       pick(block, "pubDate") ?? pick(block, "published") ?? pick(block, "updated") ?? undefined;

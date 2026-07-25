@@ -674,7 +674,7 @@ function renderDetail(d) {
   const clsBadge = d.classification
     ? `<span class="badge ${d.classification === "high-risk speculative" ? "high" : d.classification === "speculative" ? "speculative" : "conservative"}">${esc(d.classification)}</span>`
     : "";
-  const evLabel = (t) => ({ earnings_call: "Earnings call", investor_day: "Investor day", conference: "Conference", keynote: "Keynote", fireside_chat: "Fireside chat", interview: "Interview", shareholder_meeting: "Shareholder meeting", product_launch: "Product launch", press_conference: "Press conference", podcast: "Podcast", presentation: "Presentation", sec_exhibit: "SEC exhibit", blog_post: "Blog post", video: "Video" }[t] || (t || "Document"));
+  const evLabel = (t) => ({ earnings_call: "Earnings call", investor_day: "Investor day", conference: "Conference", keynote: "Keynote", fireside_chat: "Fireside chat", interview: "Interview", shareholder_meeting: "Shareholder meeting", product_launch: "Product launch", press_conference: "Press conference", podcast: "Podcast", presentation: "Presentation", sec_exhibit: "SEC exhibit", blog_post: "Blog post", video: "Video", news_article: "News", press_release: "Press release" }[t] || (t || "Document"));
 
   const sourceCard = (s) => {
     const said = (s.said || []).map((q) =>
@@ -687,15 +687,16 @@ function renderDetail(d) {
     } else if (s.kind === "audio" && s.embedUrl) {
       media = `<audio class="src-audio" controls preload="metadata" src="${esc(s.embedUrl)}"></audio>`;
     }
-    const badge = s.kind === "video" ? { cls: "speculative", label: "▶ Video" } : s.kind === "audio" ? { cls: "audio", label: "♪ Audio" } : { cls: "conservative", label: "≡ Transcript" };
-    const linkLabel = s.kind === "video" ? "Watch ↗" : s.kind === "audio" ? "Listen ↗" : "Transcript ↗";
+    const badge = s.kind === "video" ? { cls: "speculative", label: "▶ Video" } : s.kind === "audio" ? { cls: "audio", label: "♪ Audio" } : s.kind === "news" ? { cls: "news", label: "📰 News" } : { cls: "conservative", label: "≡ Transcript" };
+    const linkLabel = s.kind === "video" ? "Watch ↗" : s.kind === "audio" ? "Listen ↗" : s.kind === "news" ? "Read ↗" : "Transcript ↗";
     return `<div class="source">
       <div class="source-head">
         <span class="badge ${badge.cls}">${badge.label}</span>
-        <span class="source-type">${esc(evLabel(s.eventType))}${s.publishedAt ? " · " + esc(String(s.publishedAt).slice(0, 10)) : ""}</span>
+        <span class="source-type">${esc(evLabel(s.eventType))}${s.publisher ? " · " + esc(s.publisher) : ""}${s.publishedAt ? " · " + esc(String(s.publishedAt).slice(0, 10)) : ""}</span>
         <span class="source-counts">${s.positive ? `<span class="pos">▲${s.positive}</span>` : ""} ${s.negative ? `<span class="neg">▼${s.negative}</span>` : ""}</span>
         <a class="source-link" href="${esc(s.url)}" target="_blank" rel="noopener">${linkLabel}</a>
       </div>
+      ${s.kind === "news" && s.title ? `<a class="src-title" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : ""}
       ${media}
       ${said ? `<div class="said">${said}</div>` : ""}
     </div>`;
@@ -767,7 +768,7 @@ function renderDetail(d) {
     ${analysisBlock(d)}
 
     ${sourcesHtml
-      ? `<div class="dl-section"><h3>Transcripts &amp; media — what they said (${(d.sources || []).length})</h3><div class="sources">${sourcesHtml}</div></div>`
+      ? `<div class="dl-section"><h3>Sources — transcripts, news &amp; media (${(d.sources || []).length})</h3><div class="sources">${sourcesHtml}</div></div>`
       : sig
         ? `<div class="dl-section"><h3>Signals (${(d.signals || []).length})</h3><div class="results">${sig}</div></div>`
         : ""}

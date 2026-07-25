@@ -64,13 +64,23 @@ What is **fully implemented**:
 
 Beyond SEC filings, the index now ingests:
 
-- **News** — `transcripts news <TICKERS...>`. Keyless discovery (Yahoo per-ticker
-  RSS, Google News RSS, newswire feeds) plus optional ValueSERP search; article
-  bodies are fetched and parsed by us, never taken from a vendor summary. Every
+- **News** — `transcripts news <TICKERS...>`, and automatically on every AI
+  analysis (see below). Keyless discovery (Yahoo per-ticker RSS, Bing News RSS,
+  Google News RSS, newswire feeds) plus optional ValueSERP search; article
+  bodies are fetched and parsed by us, never taken from a vendor summary. A
+  headline must name the company for the article to be ingested — a per-ticker
+  feed is otherwise half syndicated market commentary about other issuers. Every
   document carries a **reputation tier** (0 primary / 1 reputable press /
   2 analysis / 3 excluded) that decides its evidentiary weight. `robots.txt` is
   honoured and publishers that block automated access degrade to
   headline + snippet rather than being routed around.
+
+  **On-demand refresh.** `/api/analyze` and `/api/analyze/stream` top up news
+  for the ticker being analyzed immediately before the model call, so "Sharpen
+  with AI" reasons over current coverage instead of whatever a past CLI run left
+  behind. That path is keyless (RSS only — an interactive click never spends
+  search credits), skipped when the ticker was refreshed in the last 6 hours,
+  and abandoned after 25s so a slow publisher cannot hold up an analysis.
 - **Media** — `transcripts media <TICKERS...>`. Earnings calls, keynotes,
   conference talks and podcasts via YouTube captions (free, already timestamped)
   with ASR as the fallback. Segments keep millisecond offsets, so a quote can
