@@ -108,9 +108,12 @@ const defaults: AppConfig = {
   databaseAuthToken: "",
   downloadsDir: "./data/downloads",
   ai: {
-    defaultProvider: "openai",
+    // Anthropic first: it is the provider with working credentials. Ordering a
+    // dead provider first cost ~1.4s of failover on every request and surfaced
+    // its quota error in the UI before the real analysis ran.
+    defaultProvider: "anthropic",
     defaultModelAlias: "latest",
-    consensusProviders: ["openai", "anthropic"],
+    consensusProviders: ["anthropic", "openai"],
     temperature: 0,
     requireStructuredOutput: true,
     requireCitations: true,
