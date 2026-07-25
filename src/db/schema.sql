@@ -360,11 +360,59 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at    TEXT
 );
 
+-- Authentication (PRD v3 §7). Accounts only — no existing route is gated.
+CREATE TABLE IF NOT EXISTS users (
+  id                TEXT PRIMARY KEY,
+  email             TEXT NOT NULL UNIQUE,   -- stored lowercased/trimmed
+  password_hash     TEXT NOT NULL,          -- argon2id via Bun.password
+  email_verified_at TEXT,
+  display_name      TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT,
+  last_login_at     TEXT,
+  disabled          INTEGER NOT NULL DEFAULT 0
+);
+
+-- Opaque session tokens. Only the SHA-256 of the token is stored, so a database
+-- leak does not yield usable sessions.
+CREATE TABLE IF NOT EXISTS sessions (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  token_hash    TEXT NOT NULL UNIQUE,
+  created_at    TEXT NOT NULL,
+  expires_at    TEXT NOT NULL,
+  revoked_at    TEXT,
+  user_agent    TEXT,
+  ip            TEXT
+);
+
+-- Single-use email tokens: address verification and password reset. Hashed at
+-- rest for the same reason as sessions.
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  kind          TEXT NOT NULL,            -- verify_email | reset_password
+  token_hash    TEXT NOT NULL UNIQUE,
+  created_at    TEXT NOT NULL,
+  expires_at    TEXT NOT NULL,
+  consumed_at   TEXT
+);
+
+-- Throttling for auth endpoints (login, signup, reset requests).
+CREATE TABLE IF NOT EXISTS auth_attempts (
+  id            TEXT PRIMARY KEY,
+  bucket        TEXT NOT NULL,            -- e.g. "login:a@b.com" / "reset:1.2.3.4"
+  created_at    TEXT NOT NULL
+);
+
 -- Helpful indexes
 CREATE INDEX IF NOT EXISTS idx_signals_ticker ON signals(ticker);
 CREATE INDEX IF NOT EXISTS idx_corrob_ticker ON corroborations(ticker, relation);
 CREATE INDEX IF NOT EXISTS idx_documents_publisher ON documents(publisher);
 CREATE INDEX IF NOT EXISTS idx_riskflags_ticker ON risk_flags(ticker, flag);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_authtokens_user ON auth_tokens(user_id, kind);
+CREATE INDEX IF NOT EXISTS idx_authattempts_bucket ON auth_attempts(bucket, created_at);
 CREATE INDEX IF NOT EXISTS idx_bars_ticker_tf ON market_bars(ticker, timeframe, ts);
 CREATE INDEX IF NOT EXISTS idx_analyses_ticker ON analyses(ticker, as_of);
 CREATE INDEX IF NOT EXISTS idx_segments_transcript ON transcript_segments(transcript_id, seg_index);

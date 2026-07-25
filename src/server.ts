@@ -24,12 +24,32 @@ import { calculateIndicators, scoreTechnicalSetup } from "./technical/indicators
 import { buildEvidence } from "./evidence/builder.ts";
 import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
+import { Mailer } from "./auth/email.ts";
+import { handleAuthRoute } from "./auth/routes.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
 const config = loadConfig();
 const db = getDb(config);
 await migrate(db);
 const registry = buildRegistry(config);
+
+// Accounts only — no existing route is gated by authentication (PRD v3 §7).
+const mailer = new Mailer({
+  resendApiKey: config.secrets.resendApiKey,
+  mailgunApiKey: config.secrets.mailgunApiKey,
+  mailgunDomain: config.secrets.mailgunDomain,
+  from: config.secrets.mailFrom || undefined,
+});
+const authDeps = {
+  db,
+  mailer,
+  appUrl: config.appUrl,
+  // Secure cookies require HTTPS; localhost development is served over HTTP.
+  secureCookies: config.appUrl.startsWith("https://"),
+};
+console.log(
+  `auth: email transport = ${mailer.transport}${mailer.configured ? ` (from ${mailer.from})` : " — verification emails will NOT be sent"}`,
+);
 
 const port = Number(process.env.PORT ?? 8080);
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
@@ -590,6 +610,9 @@ const server = Bun.serve({
         ranked.forEach((c, i) => (c.rank = i + 1));
         return json({ topic: topic ?? null, provider, horizonQuarters: horizon, candidates: ranked, disclaimer: DISCLAIMER });
       }
+
+      const authResponse = await handleAuthRoute(req, p, authDeps);
+      if (authResponse) return authResponse;
 
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
 

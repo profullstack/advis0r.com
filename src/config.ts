@@ -14,6 +14,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export interface AppConfig {
+  /** Public base URL, used to build links in verification/reset emails. */
+  appUrl: string;
   databaseUrl: string;
   databaseAuthToken: string;
   downloadsDir: string;
@@ -89,6 +91,11 @@ export interface AppConfig {
     valueSerpApiKey: string;
     /** Groq API key for Whisper ASR of audio/video sources (PRD v3 §2.2). */
     groqApiKey: string;
+    /** Transactional email for verification/reset (PRD v3 §7). */
+    resendApiKey: string;
+    mailgunApiKey: string;
+    mailgunDomain: string;
+    mailFrom: string;
     /**
      * ElevenLabs Scribe — the preferred ASR backend: word-level timestamps
      * plus speaker diarization. Anthropic offers no speech-to-text endpoint,
@@ -104,6 +111,7 @@ function expandHome(p: string): string {
 }
 
 const defaults: AppConfig = {
+  appUrl: "http://localhost:8080",
   databaseUrl: "file:./data/transcripts.sqlite",
   databaseAuthToken: "",
   downloadsDir: "./data/downloads",
@@ -174,6 +182,10 @@ const defaults: AppConfig = {
     valueSerpApiKey: "",
     groqApiKey: "",
     elevenLabsApiKey: "",
+    resendApiKey: "",
+    mailgunApiKey: "",
+    mailgunDomain: "",
+    mailFrom: "",
   },
 };
 
@@ -208,6 +220,7 @@ function mergeToml(base: AppConfig, toml: Record<string, any>): AppConfig {
 
 function applyEnv(c: AppConfig): AppConfig {
   const env = process.env;
+  if (env.APP_URL) c.appUrl = env.APP_URL;
   if (env.DATABASE_URL) c.databaseUrl = env.DATABASE_URL;
   if (env.DATABASE_AUTH_TOKEN) c.databaseAuthToken = env.DATABASE_AUTH_TOKEN;
   if (env.APCA_API_DATA_URL) c.alpaca.dataUrl = env.APCA_API_DATA_URL;
@@ -220,6 +233,10 @@ function applyEnv(c: AppConfig): AppConfig {
     valueSerpApiKey: env.VALUESERP_API_KEY ?? "",
     groqApiKey: env.GROQ_API_KEY ?? "",
     elevenLabsApiKey: env.ELEVENLABS_API_KEY ?? "",
+    resendApiKey: env.RESEND_API_KEY ?? "",
+    mailgunApiKey: env.MAILGUN_API_KEY ?? "",
+    mailgunDomain: env.MAILGUN_DOMAIN ?? "",
+    mailFrom: env.MAIL_FROM ?? "",
   };
   c.databaseUrl = expandHome(c.databaseUrl);
   return c;
