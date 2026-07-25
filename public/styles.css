@@ -260,6 +260,9 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
   padding: .18rem .5rem; font-size: .72rem; cursor: pointer; font-family: inherit; white-space: nowrap; }
 .wl-toggle:hover { border-color: rgba(255,255,255,.34); }
 .wl-toggle.on { border-color: rgba(111,207,143,.5); color: #6fcf8f; }
+.dl-actions { display: flex; gap: .5rem; margin-top: .6rem; }
+.dl-watch { font-size: .8rem; padding: .32rem .7rem; border-radius: 8px; }
+.dl-watch-promo { max-width: 460px; margin-top: .9rem; }
 .wl-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem .9rem; }
 .wl-main { display: flex; align-items: baseline; gap: .7rem; min-width: 0; }
 .wl-tick { font-weight: 600; color: var(--fg, #d7dee8); text-decoration: none; font-size: .95rem; }

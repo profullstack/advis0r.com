@@ -712,12 +712,14 @@ function renderDetail(d) {
       <div>
         <span class="tkr">${esc(d.ticker)}</span> ${clsBadge}
         <div class="cname">${esc(d.companyName || "")}${d.exchange ? " · " + esc(d.exchange) : ""}</div>
+        <div class="dl-actions" id="dl-watch-slot">${detailWatchButton(d.ticker)}</div>
       </div>
       <div class="dl-price">
         <div class="p">${d.lastPrice != null ? "$" + Number(d.lastPrice).toFixed(2) : "—"}</div>
         <div class="sub">${chg != null ? `<span class="${chg >= 0 ? "sig-dir positive" : "sig-dir negative"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span> · ` : ""}${d.delayed ? "delayed" : "live"} · ${esc(d.marketSource)}</div>
       </div>
     </div>
+    <div id="dl-watch-promo"></div>
 
     <div class="chartbox">
       <div id="lwc-price" class="lwchart"></div>
@@ -778,6 +780,7 @@ function renderDetail(d) {
 
 async function openTicker(sym) {
   if (!sym) return;
+  detailTicker = sym;
   const modal = $("#detail");
   modal.classList.remove("hidden");
   $("#detail-panel").innerHTML = `<button class="close-x" data-close>×</button><div class="spinner"></div><p class="empty">Loading ${esc(sym)}…</p>`;
@@ -791,6 +794,7 @@ async function openTicker(sym) {
 }
 function closeDetail() {
   destroyCharts();
+  detailTicker = null;
   $("#detail").classList.add("hidden");
   document.body.style.overflow = "";
 }
@@ -813,6 +817,16 @@ if ("serviceWorker" in navigator) {
    the session's user id, and an anonymous request gets 401 + authRequired,
    which is what this view renders a sign-in prompt from. */
 
+
+/** Mirrors FREE_MONTHLY_CREDITS in src/credits/ledger.ts — used only in the
+    signed-out pitch, where /api/credits has no balance to report yet. */
+const FREE_CREDITS_PER_MONTH = 100;
+
+/** Ticker the detail modal is currently showing, so the watch button in its
+    header can be re-rendered when the user signs in without reloading. */
+var detailTicker = null;
+/** Ticker the visitor tried to save while signed out; added once they land. */
+var pendingWatch = null;
 
 async function wlApi(method, body) {
   const res = await fetch("/api/watchlist", {
@@ -851,7 +865,11 @@ function renderMyWatchlist(items) {
 function syncWatchButton(btn) {
   const t = btn.dataset.watch;
   const on = myTickers.has(t);
-  btn.textContent = on ? "✓ Watching" : "+ Watchlist";
+  // The detail modal has room for a fuller label than a Discover card header.
+  const long = btn.classList.contains("dl-watch");
+  btn.textContent = on
+    ? (long ? "✓ On your watchlist" : "✓ Watching")
+    : (long ? "+ Add to watchlist" : "+ Watchlist");
   btn.classList.toggle("on", on);
 }
 
@@ -882,6 +900,70 @@ async function toggleWatch(ticker) {
   }
 }
 
+/* ---- "Add to watchlist" from the stock detail modal ----
+   Signed-in visitors get the same toggle the Discover cards use. Signed-out
+   ones get the button too — clicking it explains what an account buys them
+   instead of failing with a 401 — and the ticker they wanted is saved for them
+   as soon as they sign in. */
+
+function detailWatchButton(ticker) {
+  if (!authState.user) {
+    return `<button class="wl-toggle dl-watch" data-watch-promo="${esc(ticker)}">+ Add to watchlist</button>`;
+  }
+  const on = myTickers.has(ticker);
+  return `<button class="wl-toggle dl-watch${on ? " on" : ""}" data-watch="${esc(ticker)}">${
+    on ? "✓ On your watchlist" : "+ Add to watchlist"
+  }</button>`;
+}
+
+function watchlistPromo(ticker) {
+  return `<div class="ai-promo dl-watch-promo">
+    <div class="ai-promo-badge">✨ Free account</div>
+    <p class="ai-promo-h">Create a free account to save ${esc(ticker)}</p>
+    <ul class="ai-promo-list">
+      <li>Your watchlist is private to your account and follows you to any device</li>
+      <li><strong>${FREE_CREDITS_PER_MONTH} credits every month, free</strong> — spend them on AI analysis of any ticker</li>
+      <li>No card needed; buy more credits with crypto only if you run out</li>
+    </ul>
+    <button class="primary ai-promo-cta" data-promo-signup>Create a free account</button>
+    <p class="ai-promo-alt">Already have one? <a href="#" data-auth-mode-open="login">Sign in</a></p>
+  </div>`;
+}
+
+function renderDetailWatch() {
+  const slot = document.getElementById("dl-watch-slot");
+  if (slot && detailTicker) slot.innerHTML = detailWatchButton(detailTicker);
+  const promo = document.getElementById("dl-watch-promo");
+  if (promo && authState.user) promo.innerHTML = "";
+}
+
+document.addEventListener("click", (e) => {
+  const promoBtn = e.target.closest("[data-watch-promo]");
+  if (promoBtn) {
+    e.preventDefault();
+    const ticker = promoBtn.dataset.watchPromo;
+    pendingWatch = ticker;
+    const slot = document.getElementById("dl-watch-promo");
+    if (slot) {
+      slot.innerHTML = watchlistPromo(ticker);
+      slot.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } else {
+      openAuth("signup");
+    }
+  }
+});
+
+// Signing in from the promo finishes the job the visitor started.
+window.addEventListener("advis0r:auth-changed", async () => {
+  renderDetailWatch();
+  if (authState.user && pendingWatch) {
+    const ticker = pendingWatch;
+    pendingWatch = null;
+    await toggleWatchAdd(ticker);
+    renderDetailWatch();
+  }
+});
+
 document.addEventListener("click", (e) => {
   if (e.target.closest(".wl-signin")) { e.preventDefault(); openAuth("login"); return; }
   const add = e.target.closest("#my-add-btn");
@@ -897,7 +979,7 @@ document.addEventListener("click", (e) => {
   const w = e.target.closest("[data-watch]");
   if (w) { e.preventDefault(); toggleWatch(w.dataset.watch); return; }
   const d = e.target.closest("[data-detail]");
-  if (d) { e.preventDefault(); openDetail(d.dataset.detail); return; }
+  if (d) { e.preventDefault(); openTicker(d.dataset.detail); return; }
 });
 
 async function toggleWatchAdd(ticker) {
