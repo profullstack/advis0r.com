@@ -516,6 +516,41 @@ program
     });
   });
 
+// --- reextract --------------------------------------------------------------
+program
+  .command("reextract")
+  .description(
+    "Re-run signal extraction over stored documents, so a new taxonomy rule applies to what is already indexed.",
+  )
+  .option("--provider <id>", "restrict to one provider (e.g. news)")
+  .option("--ticker <symbols...>", "restrict to these tickers")
+  .option("--dry-run", "report what would be written, write nothing", false)
+  .action(async (opts) => {
+    await withApp(async ({ db }) => {
+      const { reextractSignals } = await import("./pipeline/reextract.ts");
+      const result = await reextractSignals(
+        db,
+        {
+          providerId: opts.provider,
+          tickers: opts.ticker,
+          dryRun: Boolean(opts.dryRun),
+        },
+        (msg) => console.error(`  ${msg}`),
+      );
+      console.log(
+        `${opts.dryRun ? "[dry run] " : ""}Re-extracted ${result.documents} document(s): ` +
+          `${result.signalsFound} signal(s) matched, ${result.signalsInserted} new.`,
+      );
+      for (const [type, n] of Object.entries(result.byType).sort((a, b) => b[1] - a[1])) {
+        console.log(`  ${String(n).padStart(6)}  ${type}`);
+      }
+      if (result.errors.length) {
+        console.error(`${result.errors.length} error(s):`);
+        for (const e of result.errors.slice(0, 5)) console.error(`  - ${e}`);
+      }
+    });
+  });
+
 // --- discover -------------------------------------------------------------
 addScreenOptions(
   program.command("discover <topic>").description("Discover candidate stocks from transcript signals + market data."),

@@ -25,6 +25,8 @@ interface Rule {
   direction: Dir;
   weight: number; // base strength 0-1
   patterns: RegExp[];
+  /** Phrases that use the same words for something else (see `acquisition`). */
+  exclude?: RegExp[];
 }
 
 /**
@@ -56,6 +58,45 @@ const RULES: Rule[] = [
   { signalType: "strategic_partnership", direction: "positive", weight: 0.7, patterns: [/strategic (?:partnership|alliance|agreement)/i, /partner(?:ed|ship) with/i, /collaboration with/i] },
   { signalType: "pricing_power", direction: "positive", weight: 0.7, patterns: [/pricing power/i, /(?:raised|increased) prices/i, /price (?:increase|realization)/i] },
   { signalType: "new_recurring_revenue", direction: "positive", weight: 0.75, patterns: [/recurring revenue/i, /\bARR\b/, /subscription (?:revenue|growth)/i] },
+
+  // M&A. Deliberately `mixed`: an acquisition is material either way, but its
+  // sign depends on price, funding and integration — a debt-funded deal and a
+  // premium takeover of the subject are not the same news. Scoring treats mixed
+  // as directionless, so this surfaces the event to the model without asserting
+  // that it is good or bad. Real coverage this was missing: "WESCO
+  // International (WCC) Aims to Acquire Newark Engineering".
+  {
+    signalType: "acquisition",
+    direction: "mixed",
+    weight: 0.75,
+    patterns: [
+      /\b(?:agree[sd]?|aims?|plans?|intends?|moves?|seeks?|offers?)\s+to\s+acquire\b/i,
+      /\b(?:will|would|to)\s+acquire\b/i,
+      /\bto\s+be\s+acquired\b/i,
+      /\bacquisition\s+of\b/i,
+      /\b(?:completed|closed|announced|unveiled)\s+(?:the\s+|its\s+)?acquisition\b/i,
+      /\b(?:definitive\s+)?merger\s+agreement\b/i,
+      /\b(?:takeover|buyout)\s+(?:bid|offer|proposal|deal)\b/i,
+      /\ball[- ]cash\s+(?:deal|transaction|offer)\b/i,
+      // "acquired Newark Engineering" — a named target, so case matters here.
+      /\bacquir(?:e|es|ed|ing)\s+(?:a\s+|the\s+)?[A-Z][\w&.'-]+/,
+    ],
+    exclude: [
+      // The same words priced per customer rather than per company.
+      /\b(?:customer|client|user|subscriber|talent|patient|deposit|traffic|member)\s+acquisition\b/i,
+      /\bacquisition\s+(?:cost|costs|spend|marketing|channel|strategy for customers)\b/i,
+      // Equity-award and warrant boilerplate. "The right to acquire Shares"
+      // appears in most option agreements and is not a transaction: it was the
+      // single largest false positive when this rule was first run over the
+      // stored SEC exhibits.
+      /\b(?:right|rights|option|options|warrant|warrants|entitled|eligible|ability)\s+to\s+acquire\b/i,
+      /\bto\s+acquire\s+(?:shares?|common stock|securities|equity|stock)\b/i,
+      /\b(?:participant|grantee|optionee|award agreement|equity incentive plan|restricted stock)\b/i,
+      // Risk-factor prose describes acquisitions in general, not a deal:
+      // "The development or acquisition of data center facilities requires…".
+      /\b(?:no assurance|we may be unable|if we are unable|requires substantial|risk factors)\b/i,
+    ],
+  },
 
   { signalType: "guidance_reduction", direction: "negative", weight: 0.9, patterns: [rule(String.raw`(?:lower(?:s|ed|ing)?|reduce[sd]?|reducing|cuts?|cutting|slash(?:es|ed|ing)?|trim(?:s|med|ming)?)`, String.raw`(?:guidance|outlook|forecast)`), /guidance (?:down|lower|below)/i, /guidance (?:was|were|has been) (?:cut|lowered|reduced)/i] },
   { signalType: "cash_burn", direction: "negative", weight: 0.8, patterns: [/cash burn/i, /burn rate/i, /using cash/i] },
@@ -147,6 +188,7 @@ export function extractSignals(
 
     for (const rule of RULES) {
       if (!rule.patterns.some((p) => p.test(sentence))) continue;
+      if (rule.exclude?.some((p) => p.test(sentence))) continue;
       const hasNumber = NUMERIC.test(sentence);
       const specificity = hasNumber ? 0.85 : 0.45;
       const strength = Math.min(1, rule.weight * (hasNumber ? 1 : 0.9));

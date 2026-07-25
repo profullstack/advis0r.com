@@ -441,6 +441,35 @@ describe("signal rules match reported speech, not just executive speech", () => 
     expect(types).toContain("customer_win");
   });
 
+  test("M&A is extracted, and carries no direction of its own", () => {
+    // The headline that motivated the rule: real coverage, previously ignored.
+    const sigs = article("WESCO International (WCC) aims to acquire Newark Engineering for $120 million.");
+    const acq = sigs.find((s) => s.signalType === "acquisition");
+    expect(acq).toBeDefined();
+    // Mixed, not positive: the sign depends on price, funding and integration.
+    expect(acq!.direction).toBe("mixed");
+  });
+
+  test("other M&A phrasings are extracted", () => {
+    for (const text of [
+      "The company entered a definitive merger agreement with Acme Corp.",
+      "Vistra completed the acquisition of a 1.2 GW gas portfolio.",
+      "Vistra agreed to be acquired in an all-cash deal.",
+    ]) {
+      expect(article(text).map((s) => s.signalType)).toContain("acquisition");
+    }
+  });
+
+  test("customer acquisition is not an acquisition", () => {
+    for (const text of [
+      "Customer acquisition cost fell 12% year over year.",
+      "We improved our subscriber acquisition strategy for customers this quarter.",
+      "Talent acquisition remains competitive in this market.",
+    ]) {
+      expect(article(text).map((s) => s.signalType)).not.toContain("acquisition");
+    }
+  });
+
   test("first-person transcript phrasing still matches (no regression)", () => {
     const types = article("We are raising our guidance for the full year to $6.5 billion.")
       .map((s) => s.signalType);
