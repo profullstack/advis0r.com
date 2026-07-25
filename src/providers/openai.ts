@@ -75,6 +75,7 @@ export class OpenAIProvider implements AnalysisProvider {
     const user = buildUserPrompt(request);
     const res = await fetch(`${BASE}/chat/completions`, {
       method: "POST",
+      signal: AbortSignal.timeout(Number(process.env.ANALYZE_TIMEOUT_MS ?? 90_000)),
       headers: this.headers(),
       // `temperature` is omitted — newer OpenAI models only accept the default.
       body: JSON.stringify({

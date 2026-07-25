@@ -134,3 +134,91 @@ export const stockAnalysisJsonSchema = {
     "evidenceIds", "missingData",
   ],
 } as const;
+
+/**
+ * Convert a JSON Schema into the subset Anthropic's strict tool use accepts.
+ *
+ * Strict mode is what guarantees `tool_use.input` matches the schema exactly —
+ * without it the model returned string-valued `catalystSummary` / `riskSummary`
+ * / `evidenceIds` / `missingData` where arrays are required, wasting the entire
+ * (slow) model call on output that could never validate.
+ *
+ * Two transformations are required, both enforced by the API with a 400:
+ *   1. every object node needs `additionalProperties: false`;
+ *   2. numeric/string range keywords (`minimum`, `maximum`, `multipleOf`,
+ *      `minLength`, `maxLength`, `minItems`, `maxItems`, `pattern`, `format`)
+ *      are unsupported and must be removed.
+ *
+ * Dropping (2) costs nothing: `StockAnalysisSchema` (Zod) still validates the
+ * response client-side, so the 0-100 score bounds are enforced either way.
+ */
+const STRICT_UNSUPPORTED = new Set([
+  "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+  "minLength", "maxLength", "pattern", "format",
+  "minItems", "maxItems", "uniqueItems",
+]);
+
+export function toStrictJsonSchema<T>(schema: T): T {
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!node || typeof node !== "object") return node;
+    const src = node as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(src)) {
+      if (STRICT_UNSUPPORTED.has(k)) continue;
+      out[k] = walk(v);
+    }
+    if (out.type === "object" && out.properties && out.additionalProperties === undefined) {
+      out.additionalProperties = false;
+    }
+    return out;
+  };
+  return walk(schema) as T;
+}
+
+/** Strict-mode-ready variant of the analysis schema. */
+export const strictStockAnalysisJsonSchema = toStrictJsonSchema(stockAnalysisJsonSchema);
+
+/**
+ * Normalize a model's tool-call output before schema validation.
+ *
+ * Models intermittently emit a plain string where the schema requires an array
+ * of strings — observed on `catalystSummary`, `riskSummary`, `evidenceIds` and
+ * `missingData`, which failed Zod and discarded an otherwise-good (and slow)
+ * response. Strict tool use would prevent it at the source, but this schema is
+ * too large for the API to compile a strict grammar from, so the repair happens
+ * here instead.
+ *
+ * Deliberately narrow: it only widens a scalar into a one-element array (or
+ * splits an obviously-delimited list) for known array-typed fields. It never
+ * invents content and never touches a field the model got right.
+ */
+const STRING_ARRAY_FIELDS = [
+  "catalystSummary",
+  "riskSummary",
+  "evidenceIds",
+  "missingData",
+] as const;
+
+export function coerceAnalysisShape(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const out = { ...(input as Record<string, unknown>) };
+  for (const field of STRING_ARRAY_FIELDS) {
+    const v = out[field];
+    if (typeof v !== "string") continue;
+    const text = v.trim();
+    if (!text) {
+      out[field] = [];
+      continue;
+    }
+    // Newline- or semicolon-delimited lists are the common shape; otherwise
+    // keep the string intact as a single entry rather than guessing at commas
+    // (figures and prose routinely contain them).
+    const parts = text
+      .split(/\r?\n+|;\s*/)
+      .map((p) => p.replace(/^[\s*\-\u2022]+/, "").trim())
+      .filter(Boolean);
+    out[field] = parts.length > 1 ? parts : [text];
+  }
+  return out;
+}

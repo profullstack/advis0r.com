@@ -373,6 +373,108 @@ const server = Bun.serve({
       // Tries the requested (or default) provider first, then falls back to the
       // others — so OpenAI is used the moment its quota resets, and Anthropic
       // covers it in the meantime.
+
+      // Streaming variant of /api/analyze. Emits a Server-Sent Event per
+      // pipeline stage so the UI can show what is actually happening — the
+      // previous blind spinner made a slow model call, a validation failure and
+      // an edge-proxy 502 all look identical.
+      if (p === "/api/analyze/stream") {
+        const symbol = url.searchParams.get("symbol");
+        if (!symbol) return json({ error: "missing ?symbol=" }, 400);
+        const ticker = symbol.toUpperCase();
+        const requested = url.searchParams.get("provider");
+        // `balanced` (Sonnet-tier) rather than `latest`: measured 44s vs 67s
+        // on the same input, for an interactive path where latency is the
+        // difference between a usable feature and a proxy timeout.
+        const model = url.searchParams.get("model") ?? "balanced";
+        const all = [...registry.ai.keys()].filter((k) => k !== "offline");
+        const order =
+          requested && requested !== "offline"
+            ? [requested, ...all.filter((x) => x !== requested)]
+            : [config.ai.defaultProvider, ...all.filter((x) => x !== config.ai.defaultProvider)];
+
+        const stream = new ReadableStream({
+          async start(controller) {
+            const enc = new TextEncoder();
+            const started = Date.now();
+            const send = (event: string, data: unknown) => {
+              try {
+                controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+              } catch {
+                /* client disconnected */
+              }
+            };
+            // Heartbeat keeps intermediaries from buffering or closing an idle
+            // connection during the long model call.
+            const beat = setInterval(() => {
+              try {
+                controller.enqueue(enc.encode(`: keep-alive ${Date.now() - started}ms\n\n`));
+              } catch {
+                /* ignore */
+              }
+            }, 5000);
+
+            send("status", { message: `Analyzing ${ticker}`, providers: order });
+            let lastErr = "no analysis produced";
+            try {
+              for (const prov of order) {
+                if (!registry.ai.has(prov)) continue;
+                send("provider", { provider: prov, message: `Trying ${prov}` });
+                try {
+                  const outcome = await analyzeTicker(db, config, registry, ticker, {
+                    topic: url.searchParams.get("topic") ?? ticker,
+                    asOf: new Date().toISOString(),
+                    horizonQuarters: 2,
+                    provider: prov,
+                    model,
+                    criteria: {},
+                    persist: true,
+                    onProgress: (p) => send("stage", p),
+                  });
+                  if (outcome.candidate) {
+                    const c = outcome.candidate;
+                    send("result", {
+                      provider: c.provider,
+                      model: c.model,
+                      overallScore: c.overallScore,
+                      confidence: c.confidence,
+                      analysis: c.analysis,
+                      analyzedAt: c.analyzedAt,
+                      elapsedMs: Date.now() - started,
+                      disclaimer: DISCLAIMER,
+                    });
+                    return;
+                  }
+                  lastErr = outcome.filterReasons.join("; ") || "filtered out";
+                  send("provider_failed", { provider: prov, error: lastErr });
+                } catch (err) {
+                  lastErr = String(err).slice(0, 400);
+                  console.error(`[analyze] ${ticker} ${prov} failed: ${lastErr}`);
+                  send("provider_failed", { provider: prov, error: lastErr });
+                }
+              }
+              send("failed", { error: lastErr, elapsedMs: Date.now() - started });
+            } finally {
+              clearInterval(beat);
+              try {
+                controller.close();
+              } catch {
+                /* already closed */
+              }
+            }
+          },
+        });
+
+        return new Response(stream, {
+          headers: {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache, no-transform",
+            connection: "keep-alive",
+            "x-accel-buffering": "no",
+          },
+        });
+      }
+
       if (p === "/api/analyze") {
         const symbol = url.searchParams.get("symbol");
         if (!symbol) return json({ error: "missing ?symbol=" }, 400);
@@ -382,7 +484,7 @@ const server = Bun.serve({
           requested && requested !== "offline"
             ? [requested, ...all.filter((x) => x !== requested)]
             : [config.ai.defaultProvider, ...all.filter((x) => x !== config.ai.defaultProvider)];
-        const model = url.searchParams.get("model") ?? "latest";
+        const model = url.searchParams.get("model") ?? "balanced";
         let lastErr = "no analysis produced";
         for (const prov of order) {
           if (!registry.ai.has(prov)) continue;

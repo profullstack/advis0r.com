@@ -21,7 +21,32 @@ import type {
   RankedCandidate,
 } from "../types.ts";
 
+/**
+ * Stage callback for the interactive path (PRD v3 §4.x).
+ *
+ * The UI previously showed an untimed spinner while this pipeline ran, so a
+ * slow or failing stage was indistinguishable from a hang. Every stage now
+ * reports as it starts and finishes.
+ */
+export type AnalyzeStage =
+  | "market_data"
+  | "fundamentals"
+  | "filters"
+  | "evidence"
+  | "model"
+  | "scoring"
+  | "persist";
+
+export interface AnalyzeProgress {
+  stage: AnalyzeStage;
+  message: string;
+  elapsedMs: number;
+  done?: boolean;
+}
+
 export interface AnalyzeOptions {
+  /** Receives a stage update as each step starts/completes. */
+  onProgress?: (p: AnalyzeProgress) => void;
   topic: string;
   asOf: string;
   from?: string;
@@ -75,8 +100,12 @@ export async function analyzeTicker(
   opts: AnalyzeOptions,
 ): Promise<AnalyzeOutcome> {
   const icfg = indicatorConfig(config);
+  const startedAt = Date.now();
+  const report = (stage: AnalyzeStage, message: string, done = false) =>
+    opts.onProgress?.({ stage, message, elapsedMs: Date.now() - startedAt, done });
 
   // 1. Deterministic market data.
+  report("market_data", `Fetching market data for ${ticker}`);
   const barsReq: BarsRequest = {
     symbols: [ticker],
     timeframe: "1Day",
@@ -102,7 +131,15 @@ export async function analyzeTicker(
       return { ticker, filtered: true, filterReasons: [`market data unavailable: ${String(err)}`] };
     }
   }
+  report(
+    "market_data",
+    marketDataAvailable ? `Market data ready (${bars.length} bars)` : "Market data unavailable — continuing",
+    true,
+  );
+
+  report("fundamentals", "Fetching SEC company facts");
   const facts = await registry.fundamentals.getCompanyFacts(ticker, opts.asOf);
+  report("fundamentals", `Fundamentals ready (${facts.source})`, true);
 
   // Derive market cap from SEC shares outstanding × last price when both exist.
   const lastPriceForCap = snapshot?.latestTrade?.price ?? snapshot?.dailyBar?.close;
@@ -121,12 +158,16 @@ export async function analyzeTicker(
     ? opts.criteria
     : stripMarketCriteria(opts.criteria);
   const candidate: Candidate = { symbol: ticker, asset, snapshot, facts, technical };
+  report("filters", "Applying deterministic screen");
   const filter = applyFilters(candidate, effectiveCriteria);
   if (!filter.passed) {
+    report("filters", `Filtered out: ${filter.reasons.join("; ")}`, true);
     return { ticker, filtered: true, filterReasons: filter.reasons };
   }
+  report("filters", "Passed screen", true);
 
   // 3. Evidence assembly.
+  report("evidence", "Assembling grounded evidence");
   const evidence = await buildEvidence(db, ticker, {
     from: opts.from,
     to: opts.to,
@@ -135,8 +176,15 @@ export async function analyzeTicker(
     technical,
   });
 
+  report(
+    "evidence",
+    `${evidence.items.length} evidence item(s) from ${evidence.independentSources} weighted source(s)`,
+    true,
+  );
+
   // 4. LLM interpretation (grounded, structured, validated).
   const ai = getAiProvider(registry, opts.provider);
+  report("model", `Running ${opts.provider} (${opts.model}) — this is the slow step`);
   const result = await ai.analyze({
     ticker,
     topic: opts.topic,
@@ -150,11 +198,14 @@ export async function analyzeTicker(
     snapshot,
   });
 
+  report("model", `${result.provider}:${result.model} returned a validated analysis`, true);
+
   if (!marketDataAvailable && !result.analysis.missingData.includes("Alpaca market/technical data")) {
     result.analysis.missingData.push("Alpaca market/technical data");
   }
 
   // 5. Deterministic composite score.
+  report("scoring", "Composing deterministic score");
   const composite = composeScore({
     analysis: result.analysis,
     technicalScore: technicalScore?.score,
@@ -187,7 +238,10 @@ export async function analyzeTicker(
     analyzedAt: new Date().toISOString(),
   };
 
+  report("scoring", "Score composed", true);
+
   if (opts.persist) {
+    report("persist", "Saving analysis + evidence");
     await persistAnalysis(
       db,
       ticker,
@@ -197,6 +251,7 @@ export async function analyzeTicker(
       composite.confidence,
       evidence.items,
     );
+    report("persist", "Saved", true);
   }
 
   return { ticker, filtered: false, filterReasons: [], candidate: ranked };

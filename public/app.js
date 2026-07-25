@@ -138,7 +138,7 @@ async function sharpenAll() {
     const card = document.querySelector(`.card[data-ticker="${t}"]`);
     if (card) card.style.opacity = "0.5";
     try {
-      await api(`/api/analyze?symbol=${encodeURIComponent(t)}&model=latest`);
+      await api(`/api/analyze?symbol=${encodeURIComponent(t)}`);
     } catch { /* skip failures, keep going */ }
     if (card) card.style.opacity = "";
   }
@@ -571,16 +571,75 @@ function analysisBlock(d) {
   </div>`;
 }
 
-async function sharpen(ticker) {
+/* Streams the analysis over SSE and shows each pipeline stage as it happens.
+   The previous version rendered an untimed spinner, so a slow model call, a
+   schema-validation failure and an edge-proxy 502 were indistinguishable. */
+function sharpen(ticker) {
   const sec = document.getElementById("ai-analysis-section");
-  if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><div class="spinner"></div><p class="empty">Running AI analysis for ${esc(ticker)}… (~20s)</p>`;
-  try {
-    const r = await api(`/api/analyze?symbol=${encodeURIComponent(ticker)}&model=latest`);
+  if (!sec) return;
+  const started = Date.now();
+  const lines = [];
+
+  const secs = () => ((Date.now() - started) / 1000).toFixed(0);
+  const paint = (state) => {
+    const log = lines
+      .map((l) => `<li class="an-step${l.done ? " done" : ""}${l.bad ? " bad" : ""}"><span class="an-step-t">${l.t}s</span> ${esc(l.text)}</li>`)
+      .join("");
+    sec.innerHTML =
+      `<h3 class="an-head">Analysis</h3>` +
+      (state === "running" ? `<div class="spinner"></div>` : "") +
+      `<p class="empty">${state === "running" ? `Analyzing ${esc(ticker)}… ${secs()}s elapsed` : esc(state)}</p>` +
+      `<ul class="an-steps">${log}</ul>` +
+      (state === "running" ? "" : `<button class="sharpen-btn" data-sharpen="${esc(ticker)}">Retry</button>`);
+  };
+  const step = (text, opts = {}) => {
+    lines.push({ text, t: secs(), done: !!opts.done, bad: !!opts.bad });
+    if (lines.length > 14) lines.shift();
+    paint("running");
+  };
+
+  step(`Requesting analysis for ${ticker}`);
+  // Keeps the elapsed counter honest during the long model call.
+  const tick = setInterval(() => paint("running"), 1000);
+
+  const es = new EventSource(`/api/analyze/stream?symbol=${encodeURIComponent(ticker)}`);
+  const stop = () => { clearInterval(tick); es.close(); };
+
+  es.addEventListener("status", (e) => {
+    const d = JSON.parse(e.data);
+    step(`Provider order: ${(d.providers || []).join(" → ")}`);
+  });
+  es.addEventListener("provider", (e) => step(JSON.parse(e.data).message));
+  es.addEventListener("stage", (e) => {
+    const d = JSON.parse(e.data);
+    step(d.message, { done: d.done });
+  });
+  es.addEventListener("provider_failed", (e) => {
+    const d = JSON.parse(e.data);
+    step(`${d.provider} failed: ${String(d.error).slice(0, 160)}`, { bad: true });
+  });
+  es.addEventListener("result", (e) => {
+    const r = JSON.parse(e.data);
+    stop();
     const dd = { ticker, aiProviders: ["ai"], aiAnalysis: { provider: r.provider, model: r.model, overallScore: r.overallScore, confidence: r.confidence, analysis: r.analysis } };
-    if (sec) sec.outerHTML = analysisBlock(dd);
-  } catch (e) {
-    if (sec) sec.innerHTML = `<h3 class="an-head">Analysis</h3><p class="empty">Sharpen failed: ${esc(e.message)}</p><button class="sharpen-btn" data-sharpen="${esc(ticker)}">Retry</button>`;
-  }
+    sec.outerHTML = analysisBlock(dd);
+  });
+  // Server-reported failure. Named "failed" rather than "error" so it cannot be
+  // confused with EventSource's built-in error event, which carries no data.
+  es.addEventListener("failed", (e) => {
+    stop();
+    const msg = JSON.parse(e.data).error || "analysis failed";
+    step(msg, { bad: true });
+    paint(`Sharpen failed: ${String(msg).slice(0, 200)}`);
+  });
+  // Transport failure (proxy timeout, dropped connection) — EventSource fires
+  // onerror with no data, which is exactly the 502 case the user hit.
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      stop();
+      paint(`Connection to the server dropped after ${secs()}s`);
+    }
+  };
 }
 
 function renderDetail(d) {
