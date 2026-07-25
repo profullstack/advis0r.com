@@ -29,6 +29,9 @@ async function refreshAuth() {
     authState.user = null;
   }
   renderAuthBar();
+  // Views that depend on the signed-in user (the saved watchlist) listen for
+  // this rather than polling.
+  window.dispatchEvent(new CustomEvent("advis0r:auth-changed"));
 }
 
 function renderAuthBar() {

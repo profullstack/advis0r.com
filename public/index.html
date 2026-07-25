@@ -18,7 +18,8 @@
         <span>advis0r<span class="dim">.com</span></span>
       </div>
       <nav class="tabs" id="tabs">
-        <button data-view="watchlist" class="active">Watchlist</button>
+        <button data-view="discover" class="active">Discover</button>
+        <button data-view="watchlist">Watchlist</button>
         <button data-view="search">Search</button>
         <button data-view="signals">Signals</button>
         <button data-view="about">About</button>
@@ -29,7 +30,7 @@
 
     <main id="main">
       <!-- Watchlist -->
-      <section class="view active" data-view="watchlist">
+      <section class="view active" data-view="discover">
         <div class="controls">
           <input id="wl-topic" type="search" list="topic-list" placeholder="Pick or type a topic (e.g. AI infrastructure)" autocomplete="off" />
           <datalist id="topic-list"></datalist>
@@ -43,6 +44,17 @@
         <p class="hint">Ranked from indexed executive transcripts using the deterministic offline analyzer (zero-cost, grounded in extracted signals). Leave topic blank to rank the whole index.</p>
         <div id="wl-summary" class="summary"></div>
         <div id="wl-list" class="cards"></div>
+      </section>
+
+      <!-- Watchlist (per-user, requires sign-in) -->
+      <section class="view" data-view="watchlist">
+        <div class="controls">
+          <input id="my-add" type="search" placeholder="Add a ticker (e.g. NVDA)" autocomplete="off" maxlength="8" />
+          <button id="my-add-btn" class="primary">Add</button>
+        </div>
+        <p class="hint">Your saved tickers. Private to your account and available on any device you sign in from.</p>
+        <div id="my-summary" class="summary"></div>
+        <div id="my-list" class="cards"></div>
       </section>
 
       <!-- Search -->

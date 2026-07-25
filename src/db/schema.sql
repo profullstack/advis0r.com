@@ -398,6 +398,17 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
   consumed_at   TEXT
 );
 
+-- Per-user saved watchlist (PRD v3 §7.1). One row per (user, ticker); the
+-- UNIQUE constraint makes "add" idempotent rather than duplicating entries.
+CREATE TABLE IF NOT EXISTS watchlist_items (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  ticker        TEXT NOT NULL,
+  note          TEXT,
+  created_at    TEXT NOT NULL,
+  UNIQUE(user_id, ticker)
+);
+
 -- Throttling for auth endpoints (login, signup, reset requests).
 CREATE TABLE IF NOT EXISTS auth_attempts (
   id            TEXT PRIMARY KEY,
@@ -413,6 +424,7 @@ CREATE INDEX IF NOT EXISTS idx_riskflags_ticker ON risk_flags(ticker, flag);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_authtokens_user ON auth_tokens(user_id, kind);
 CREATE INDEX IF NOT EXISTS idx_authattempts_bucket ON auth_attempts(bucket, created_at);
+CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bars_ticker_tf ON market_bars(ticker, timeframe, ts);
 CREATE INDEX IF NOT EXISTS idx_analyses_ticker ON analyses(ticker, as_of);
 CREATE INDEX IF NOT EXISTS idx_segments_transcript ON transcript_segments(transcript_id, seg_index);

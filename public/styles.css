@@ -254,3 +254,17 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .auth-note { margin: .1rem 0 .7rem; font-size: .78rem; line-height: 1.5; word-break: break-word; }
 .auth-note.ok { color: #6fcf8f; }
 .auth-note.bad { color: #ff8f8f; }
+
+/* ---- Per-user watchlist ---- */
+.wl-toggle { background: none; border: 1px solid rgba(255,255,255,.16); color: inherit; border-radius: 6px;
+  padding: .18rem .5rem; font-size: .72rem; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.wl-toggle:hover { border-color: rgba(255,255,255,.34); }
+.wl-toggle.on { border-color: rgba(111,207,143,.5); color: #6fcf8f; }
+.wl-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem .9rem; }
+.wl-main { display: flex; align-items: baseline; gap: .7rem; min-width: 0; }
+.wl-tick { font-weight: 600; color: var(--fg, #d7dee8); text-decoration: none; font-size: .95rem; }
+.wl-tick:hover { text-decoration: underline; }
+.wl-note { color: var(--dim, #8b95a5); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-remove { background: none; border: 1px solid rgba(255,255,255,.14); color: var(--dim, #8b95a5);
+  border-radius: 6px; padding: .2rem .55rem; font-size: .74rem; cursor: pointer; font-family: inherit; }
+.wl-remove:hover { border-color: #ff8f8f; color: #ff8f8f; }

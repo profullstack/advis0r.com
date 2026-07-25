@@ -7,10 +7,8 @@
  * without silently pretending an email was delivered.
  *
  * Sender domain matters: Resend rejects a `from` address on a domain that is
- * not verified in the account. `advis0r.com` is registered but unverified
- * (DNS records not yet published), so `MAIL_FROM` defaults to an
- * already-verified domain and can be pointed at advis0r.com once its DNS is in
- * place.
+ * not verified in the account. `advis0r.com` is DNS-verified, so mail is sent
+ * from it by default; `MAIL_FROM` can override.
  */
 export interface MailMessage {
   to: string;
@@ -35,7 +33,7 @@ export interface MailerOptions {
   appUrl?: string;
 }
 
-export const DEFAULT_FROM = "advis0r <noreply@profullstack.com>";
+export const DEFAULT_FROM = "advis0r <noreply@advis0r.com>";
 
 export class Mailer {
   constructor(private opts: MailerOptions = {}) {}

@@ -73,6 +73,7 @@ function candidateCard(c) {
         <span class="spacer"></span>
         ${isAI ? `<span class="badge audio">✨ ${esc(c.model || "AI")}</span>` : ""}
         <span class="badge ${classClass(c.classification)}">${esc(c.classification)}</span>
+        <button class="wl-toggle${myTickers.has(c.ticker) ? " on" : ""}" data-watch="${esc(c.ticker)}">${myTickers.has(c.ticker) ? "✓ Watching" : "+ Watchlist"}</button>
       </div>
       <div class="scores">
         ${scoreBlock("Overall", c.overallScore)}
@@ -101,6 +102,7 @@ function fmtCap(n) {
 }
 
 let lastWatchlist = [];
+var myTickers = new Set();
 async function runWatchlist() {
   const topic = $("#wl-topic").value.trim();
   const horizon = $("#wl-horizon").value;
@@ -783,3 +785,115 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetai
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
+
+/* ---- Per-user saved watchlist (requires sign-in) ----
+   The only authenticated surface in the app: the server scopes every query by
+   the session's user id, and an anonymous request gets 401 + authRequired,
+   which is what this view renders a sign-in prompt from. */
+
+
+async function wlApi(method, body) {
+  const res = await fetch("/api/watchlist", {
+    method,
+    headers: body ? { "content-type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: "same-origin",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { const e = new Error(data.error || "Sign in required"); e.authRequired = true; throw e; }
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function renderMyWatchlist(items) {
+  myTickers = new Set(items.map((i) => i.ticker));
+  const list = document.getElementById("my-list");
+  const summary = document.getElementById("my-summary");
+  if (!list) return;
+  if (summary) summary.textContent = items.length
+    ? `${items.length} ticker${items.length === 1 ? "" : "s"} saved`
+    : "";
+  list.innerHTML = items.length
+    ? items.map((i) => `<div class="card wl-row" data-ticker="${esc(i.ticker)}">
+        <div class="wl-main">
+          <a href="#" class="wl-tick" data-detail="${esc(i.ticker)}">${esc(i.ticker)}</a>
+          ${i.note ? `<span class="wl-note">${esc(i.note)}</span>` : ""}
+        </div>
+        <button class="wl-remove" data-remove="${esc(i.ticker)}" title="Remove from watchlist">Remove</button>
+      </div>`).join("")
+    : `<div class="empty">Nothing saved yet. Add a ticker above, or use “+ Watchlist” on any Discover result.</div>`;
+  // Keep Discover buttons in sync with what is now saved.
+  document.querySelectorAll("[data-watch]").forEach(syncWatchButton);
+}
+
+function syncWatchButton(btn) {
+  const t = btn.dataset.watch;
+  const on = myTickers.has(t);
+  btn.textContent = on ? "✓ Watching" : "+ Watchlist";
+  btn.classList.toggle("on", on);
+}
+
+async function loadMyWatchlist() {
+  const list = document.getElementById("my-list");
+  const summary = document.getElementById("my-summary");
+  if (!list) return;
+  try {
+    const { items } = await wlApi("GET");
+    renderMyWatchlist(items || []);
+  } catch (e) {
+    myTickers = new Set();
+    if (summary) summary.textContent = "";
+    list.innerHTML = e.authRequired
+      ? `<div class="empty">Your watchlist is private to your account.<br><button class="primary wl-signin" style="margin-top:.7rem">Sign in to continue</button></div>`
+      : `<div class="empty">Could not load your watchlist (${esc(e.message)}).</div>`;
+  }
+}
+
+async function toggleWatch(ticker) {
+  const on = myTickers.has(ticker);
+  try {
+    const { items } = await wlApi(on ? "DELETE" : "POST", { ticker });
+    renderMyWatchlist(items || []);
+  } catch (e) {
+    if (e.authRequired) { openAuth("login"); return; }
+    alert(e.message);
+  }
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".wl-signin")) { e.preventDefault(); openAuth("login"); return; }
+  const add = e.target.closest("#my-add-btn");
+  if (add) {
+    e.preventDefault();
+    const input = document.getElementById("my-add");
+    const t = (input?.value || "").trim();
+    if (t) { toggleWatchAdd(t); if (input) input.value = ""; }
+    return;
+  }
+  const rm = e.target.closest("[data-remove]");
+  if (rm) { e.preventDefault(); toggleWatch(rm.dataset.remove); return; }
+  const w = e.target.closest("[data-watch]");
+  if (w) { e.preventDefault(); toggleWatch(w.dataset.watch); return; }
+  const d = e.target.closest("[data-detail]");
+  if (d) { e.preventDefault(); openDetail(d.dataset.detail); return; }
+});
+
+async function toggleWatchAdd(ticker) {
+  try {
+    const { items } = await wlApi("POST", { ticker });
+    renderMyWatchlist(items || []);
+  } catch (e) {
+    if (e.authRequired) { openAuth("login"); return; }
+    alert(e.message);
+  }
+}
+
+document.getElementById("my-add")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("my-add-btn")?.click();
+});
+
+// Load on first visit to the tab, and refresh after any auth change.
+document.addEventListener("click", (e) => {
+  if (e.target.closest('#tabs button[data-view="watchlist"]')) loadMyWatchlist();
+});
+window.addEventListener("advis0r:auth-changed", loadMyWatchlist);

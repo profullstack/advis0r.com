@@ -18,6 +18,7 @@ import {
 } from "../src/auth/crypto.ts";
 import { SESSION_COOKIE, clearCookie, clientIp, sessionCookie } from "../src/auth/routes.ts";
 import { Mailer, resetEmail, verificationEmail } from "../src/auth/email.ts";
+import { MAX_WATCHLIST_ITEMS, normalizeTicker } from "../src/auth/watchlist.ts";
 
 describe("password hashing", () => {
   test("verifies a correct password and rejects a wrong one", async () => {
@@ -156,5 +157,26 @@ describe("mailer", () => {
     const m = verificationEmail('https://x/?t="><script>alert(1)</script>', 24);
     expect(m.html).not.toContain("<script>");
     expect(m.html).toContain("&lt;script&gt;");
+  });
+});
+
+describe("watchlist ticker validation", () => {
+  test("normalizes case and whitespace", () => {
+    expect(normalizeTicker("  nvda ")).toBe("NVDA");
+  });
+
+  test("accepts class-suffixed symbols", () => {
+    expect(normalizeTicker("BRK.B")).toBe("BRK.B");
+  });
+
+  test("rejects anything that is not a ticker", () => {
+    for (const bad of ["", "TOOLONGX", "not a ticker!", "../etc/passwd", "'; DROP TABLE users;--", "<script>"]) {
+      expect(normalizeTicker(bad)).toBeNull();
+    }
+  });
+
+  test("is bounded so one account cannot fill the table", () => {
+    expect(MAX_WATCHLIST_ITEMS).toBeGreaterThan(0);
+    expect(MAX_WATCHLIST_ITEMS).toBeLessThanOrEqual(1000);
   });
 });

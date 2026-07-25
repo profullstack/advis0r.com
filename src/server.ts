@@ -26,6 +26,7 @@ import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
 import { Mailer } from "./auth/email.ts";
 import { handleAuthRoute } from "./auth/routes.ts";
+import { handleWatchlistRoute } from "./auth/watchlist.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
 const config = loadConfig();
@@ -613,6 +614,11 @@ const server = Bun.serve({
 
       const authResponse = await handleAuthRoute(req, p, authDeps);
       if (authResponse) return authResponse;
+
+      // The saved watchlist is the one authenticated feature — everything else
+      // stays public.
+      const watchlistResponse = await handleWatchlistRoute(req, p, db);
+      if (watchlistResponse) return watchlistResponse;
 
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
 
