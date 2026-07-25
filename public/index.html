@@ -43,6 +43,8 @@
           <button id="wl-sharpen" class="sharpen-btn">✨ Sharpen all with AI</button>
         </div>
         <p class="hint">Ranked from indexed executive transcripts using the deterministic offline analyzer (zero-cost, grounded in extracted signals). Leave topic blank to rank the whole index.</p>
+        <!-- Sponsored text line, filled by ads.js for signed-out visitors only -->
+        <div class="adzone adzone-line" data-ad="text_link"></div>
         <div id="wl-summary" class="summary"></div>
         <div id="wl-list" class="cards"></div>
       </section>
@@ -80,6 +82,7 @@
       <!-- About -->
       <section class="view" data-view="about">
         <div class="prose">
+          <aside class="adzone adzone-rect" data-ad="banner_300x250"></aside>
           <h2>What this is</h2>
           <p>advis0r.com discovers publicly traded companies from the words of their executives — earnings calls, investor days, SEC exhibits, keynotes, interviews — and combines those signals with market and fundamental data into a ranked, <strong>evidence-backed research watchlist</strong> for a one- to two-quarter horizon.</p>
           <p>Every conclusion cites stored evidence. The models interpret facts; they never invent prices, quotes, or figures.</p>
@@ -88,6 +91,9 @@
         </div>
       </section>
     </main>
+
+    <!-- Site-wide strip: leaderboard on desktop, mobile banner on small screens -->
+    <div class="adzone adzone-strip" data-ad="auto"></div>
 
     <div id="detail" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-backdrop" data-close></div>
@@ -98,5 +104,6 @@
     <script src="/app.js"></script>
     <script src="/auth.js"></script>
       <script data-site="c5531d01-f01a-4041-a34c-4e830674da00" src="https://crawlproof.com/stats.js" async></script>
+    <script src="/ads.js"></script>
   </body>
 </html>

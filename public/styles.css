@@ -299,3 +299,20 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .credit-pkg-c { grid-area: c; font-weight: 600; font-size: .9rem; }
 .credit-pkg-r { grid-area: r; font-size: .72rem; color: var(--dim, #8b95a5); }
 .credit-pkg-p { grid-area: p; align-self: center; font-size: 1.05rem; font-weight: 600; color: #7ab4ff; }
+
+/* ---- Ad zones ----
+   Empty zones collapse to nothing, so a signed-in visitor sees no gap where
+   an ad would have been. */
+.adzone:empty { display: none; }
+.adzone-line { margin: 14px 0 4px; }
+.adzone-strip {
+  display: flex; justify-content: center;
+  max-width: 1080px; margin: 0 auto 28px;
+  padding: 18px clamp(14px, 4vw, 34px) 0;
+  border-top: 1px solid var(--line);
+}
+.adzone-rect { display: flex; justify-content: center; margin: 0 0 18px; }
+@media (min-width: 900px) {
+  /* Beside the prose on wide screens rather than stacked above it. */
+  .adzone-rect { float: right; margin: 0 0 18px 24px; }
+}
