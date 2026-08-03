@@ -11,6 +11,7 @@
  * a sending domain gets blocked.
  */
 import { DISCLAIMER } from "../compliance.ts";
+import { escapeHtml } from "../util/html.ts";
 import type { MailMessage } from "../auth/email.ts";
 import { formatSessionDate, type DigestWindow } from "./schedule.ts";
 import type { Headline, MarketSummary, Performance, UserSummary } from "./summary.ts";
@@ -30,11 +31,8 @@ const DIM = "#6b7684";
 const UP = "#3fb950";
 const DOWN = "#f85149";
 
-export function escapeHtml(s: string): string {
-  return String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
-  );
-}
+// Re-exported so existing importers (and the digest tests) keep their import path.
+export { escapeHtml };
 
 /** Period wording reused across the subject, heading and preheader. */
 export function windowLabel(window: DigestWindow): string {

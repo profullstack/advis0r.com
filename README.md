@@ -36,6 +36,9 @@ What is **fully implemented and working end-to-end**:
   `analyze-company`, and the web watchlist produce real ranked output with no
   external LLM keys.
 - **Web dashboard + PWA** and read-only HTTP API (`src/server.ts`).
+- **Persistent report pages** at `/ticker/<SYMBOL>` — every generated report is
+  stored and served from storage rather than rebuilt on each view. See
+  [Report pages](#report-pages).
 - **Watchlist email digests** — a market summary of the previous session (or the
   previous week) delivered as pre-market trading opens, 04:00 ET. See
   [Email digests](#email-digests).
@@ -163,6 +166,52 @@ environment variables (see `.env.example`):
 | `RESEND_API_KEY` / `MAILGUN_API_KEY` | Transactional + digest email transport |
 | `APP_URL` | Public base URL used for links in emails |
 | `DIGEST_SCHEDULER` | `0` disables the built-in 04:00 ET digest scheduler |
+
+## Report pages
+
+Every ticker that has been looked at has a report at **`/ticker/<SYMBOL>`** — a
+server-rendered page you can share, bookmark, or hand to a crawler.
+
+A report is a **stored snapshot**, not a live view. Building one costs a bars
+fetch, a quote snapshot, an asset lookup, a SEC EDGAR company-facts call, an
+evidence build and an offline analysis — seconds of latency and a handful of
+third-party requests. The snapshot is written once and read back thereafter:
+
+```
+first view of NVDA   1.86s   (builds and stores)
+every view after     0.19s   (one row read, zero external calls)
+```
+
+| Route | What it is |
+|---|---|
+| `GET /ticker/<SYMBOL>` | The report as a shareable page. `404` + a build CTA when none exists |
+| `GET /reports?sort=recent\|score\|ticker` | Index of every stored report |
+| `GET /sitemap.xml`, `/robots.txt` | Report URLs for crawlers |
+| `GET /api/ticker?symbol=` | The same snapshot as JSON |
+| `GET /api/reports?limit=&sort=` | The index as JSON |
+| `POST /api/report/regenerate` | Rebuild one snapshot — **watchlist members only** |
+
+**A snapshot is never refreshed on a timer.** Rebuilding on a cache age would
+reintroduce exactly the cost this removes. It is rebuilt when it does not exist,
+when a watchlist member asks, or automatically after a paid AI analysis (so the
+page reflects the new run). What keeps that honest is that every surface —
+page, modal, index — renders how old the snapshot is. A stale price is fine;
+a stale price dressed up as a live one is not.
+
+Reading is public and free. Writing is not, so regeneration requires a signed-in
+user, a ticker **on their own watchlist**, and survives a per-account throttle
+(30/hour). The button is a courtesy; the server check is the control.
+
+The pages need no JavaScript — the price history is inline SVG — so they work in
+a crawler, a link preview, or a text browser. The interactive candlestick view
+stays in the app's modal, one click away.
+
+In the app, watchlist rows link to `/ticker/<SYMBOL>` (so middle-click and
+"open in new tab" work) but open the modal on click. The modal shows the
+snapshot age, a permalink, and — for watchlist tickers — a **↻ Regenerate**
+button. Regenerating refreshes the report's *data* and is free; re-running the
+LLM is the separate, credit-metered **Re-run AI** button, so a free action never
+silently spends a credit.
 
 ## Email digests
 

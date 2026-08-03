@@ -292,6 +292,30 @@ CREATE TABLE IF NOT EXISTS model_runs (
   created_at    TEXT NOT NULL
 );
 
+-- Persisted ticker reports, one current snapshot per ticker, served at
+-- /ticker/<SYMBOL>. Before this every view recomputed bars, SEC facts, evidence
+-- and the offline analysis; the snapshot makes a report a thing that exists
+-- rather than something regenerated on each visit. The generation history stays
+-- in `analyses`, which is append-only, so overwriting here loses nothing.
+CREATE TABLE IF NOT EXISTS reports (
+  ticker            TEXT PRIMARY KEY,
+  payload_json      TEXT NOT NULL,   -- the full /api/ticker payload
+  -- Denormalized so the index page and sitemap never parse the payloads.
+  company_name      TEXT,
+  last_price        REAL,
+  overall_score     REAL,
+  confidence        REAL,
+  classification    TEXT,
+  ai_provider       TEXT,
+  ai_model          TEXT,
+  ai_generated_at   TEXT,
+  source_count      INTEGER NOT NULL DEFAULT 0,
+  signal_count      INTEGER NOT NULL DEFAULT 0,
+  generated_at      TEXT NOT NULL,   -- when THIS snapshot was captured
+  first_generated_at TEXT NOT NULL,  -- when the ticker was first covered
+  generated_by      TEXT             -- user id that triggered it, when known
+);
+
 CREATE TABLE IF NOT EXISTS rankings (
   id            TEXT PRIMARY KEY,
   strategy_version TEXT NOT NULL,
@@ -483,6 +507,8 @@ CREATE INDEX IF NOT EXISTS idx_authattempts_bucket ON auth_attempts(bucket, crea
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_credits_user ON credits_ledger(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_digest_sends_period ON digest_sends(period_key, user_id);
+CREATE INDEX IF NOT EXISTS idx_reports_generated ON reports(generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_score ON reports(overall_score DESC);
 CREATE INDEX IF NOT EXISTS idx_users_digest ON users(digest_frequency);
 CREATE INDEX IF NOT EXISTS idx_purchases_user ON credit_purchases(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bars_ticker_tf ON market_bars(ticker, timeframe, ts);

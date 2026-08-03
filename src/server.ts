@@ -33,6 +33,8 @@ import { COST_PER_ANALYSIS, refundCredits, spendCredits } from "./credits/ledger
 import { handleWatchlistRoute } from "./auth/watchlist.ts";
 import { handleDigestRoute } from "./digest/routes.ts";
 import { startDigestScheduler } from "./digest/run.ts";
+import { handleReportRoute } from "./reports/routes.ts";
+import { loadReport, normalizeSymbol, saveReport } from "./reports/store.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
 const config = loadConfig();
@@ -115,7 +117,20 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     marketError = String(err);
   }
 
-  const facts = await registry.fundamentals.getCompanyFacts(sym, asOf);
+  // SEC EDGAR rate-limits hard (403 "Request Rate Threshold Exceeded") and is
+  // the one provider with no fallback. Treated like the market fetch above:
+  // record the failure and carry on, so a transient block degrades the
+  // fundamentals section instead of preventing the report from existing at all.
+  let facts: Awaited<ReturnType<typeof registry.fundamentals.getCompanyFacts>>;
+  let factsError: string | undefined;
+  try {
+    facts = await registry.fundamentals.getCompanyFacts(sym, asOf);
+  } catch (err) {
+    factsError = String(err).slice(0, 300);
+    // `source` names what produced these facts; "unavailable" is the honest
+    // answer, and downstream code reads it rather than inferring provenance.
+    facts = { symbol: sym, asOf, source: "unavailable" };
+  }
   const lastPrice = snapshot?.latestTrade?.price ?? snapshot?.dailyBar?.close ?? bars.at(-1)?.close;
   if (facts.marketCap == null && facts.sharesOutstanding && lastPrice) {
     facts.marketCap = facts.sharesOutstanding * lastPrice;
@@ -233,6 +248,7 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     // True per-response provenance: the feed on the snapshot we actually used.
     marketSource: snapshot?.feed ?? registry.marketSource,
     marketError,
+    factsError,
     facts,
     technical,
     technicalScore,
@@ -246,6 +262,46 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     signals: sigRs.rows,
     sources,
     disclaimer: DISCLAIMER,
+  };
+}
+
+/**
+ * A ticker's report, from storage when one exists.
+ *
+ * This is the whole point of the reports table. `tickerDetail` costs a bars
+ * fetch, a snapshot, an asset lookup, a SEC company-facts call, an evidence
+ * build and an offline analysis — several seconds and a handful of third-party
+ * requests to redisplay something nobody changed. A stored snapshot costs one
+ * row read.
+ *
+ * It is never refreshed on a timer: a snapshot is rebuilt when it is missing, or
+ * when a watchlist member asks for it. What keeps that honest is that every
+ * surface renders `reportGeneratedAt` — a stale price is fine as long as it is
+ * never dressed up as a current one.
+ */
+async function getReport(
+  symbol: string,
+  opts: { rebuild?: boolean; generatedBy?: string } = {},
+): Promise<Record<string, unknown>> {
+  const sym = symbol.toUpperCase();
+  if (!opts.rebuild) {
+    const stored = await loadReport(db, sym);
+    if (stored) {
+      return {
+        ...stored.payload,
+        cached: true,
+        reportGeneratedAt: stored.generatedAt,
+        reportFirstGeneratedAt: stored.firstGeneratedAt,
+      };
+    }
+  }
+  const payload = await tickerDetail(sym);
+  const stored = await saveReport(db, sym, payload, { generatedBy: opts.generatedBy });
+  return {
+    ...payload,
+    cached: false,
+    reportGeneratedAt: stored.generatedAt,
+    reportFirstGeneratedAt: stored.firstGeneratedAt,
   };
 }
 
@@ -363,7 +419,11 @@ const server = Bun.serve({
             "GET /api/tickers": "tickers present in the index",
             "GET /api/search?q=&limit=": "full-text search over transcript segments",
             "GET /api/signals?ticker=": "extracted signals for a ticker",
-            "GET /api/ticker?symbol=": "full detail: quote, technicals, bars, fundamentals, signals, analysis",
+            "GET /api/ticker?symbol=": "stored report snapshot: quote, technicals, bars, fundamentals, signals, analysis",
+            "GET /ticker/<SYMBOL>": "the same report as a shareable page",
+            "GET /reports?sort=recent|score|ticker": "every stored report",
+            "GET /api/reports?limit=&sort=": "the report index as JSON",
+            "POST /api/report/regenerate": "rebuild one snapshot (watchlist members only)",
             "GET /api/discover?topic=&provider=offline&horizon=2&limit=": "ranked watchlist",
             "GET /api/digest": "your watchlist email frequency (requires sign-in)",
             "POST /api/digest": "set frequency: daily | weekly | off",
@@ -433,9 +493,12 @@ const server = Bun.serve({
       }
 
       if (p === "/api/ticker") {
-        const symbol = url.searchParams.get("symbol");
-        if (!symbol) return json({ error: "missing ?symbol=" }, 400);
-        return json(await tickerDetail(symbol));
+        const symbol = normalizeSymbol(url.searchParams.get("symbol"));
+        if (!symbol) return json({ error: "missing or invalid ?symbol=" }, 400);
+        // Serves the stored snapshot. Rebuilding is a separate, authorized act
+        // (POST /api/report/regenerate) so a crawler hammering this route cannot
+        // spend our market-data quota.
+        return json(await getReport(symbol));
       }
 
       // On-demand LLM sharpening for one ticker (persisted → cached thereafter).
@@ -536,6 +599,12 @@ const server = Bun.serve({
                       elapsedMs: Date.now() - started,
                       disclaimer: DISCLAIMER,
                     });
+                    // Fold the new analysis into the stored report so
+                    // /ticker/<SYMBOL> shows it. After the result is sent: the
+                    // user has what they paid for and should not wait on it.
+                    getReport(ticker, { rebuild: true, generatedBy: guard.user!.id }).catch((err) =>
+                      console.error(`[report] refresh after analyze failed for ${ticker}: ${String(err).slice(0, 200)}`),
+                    );
                     return;
                   }
                   lastErr = outcome.filterReasons.join("; ") || "filtered out";
@@ -606,6 +675,10 @@ const server = Bun.serve({
             });
             if (outcome.candidate) {
               const c = outcome.candidate;
+              // Same refresh as the streaming path, for the same reason.
+              getReport(symbol.toUpperCase(), { rebuild: true, generatedBy: guard.user!.id }).catch(
+                (err) => console.error(`[report] refresh after analyze failed: ${String(err).slice(0, 200)}`),
+              );
               return json({
                 provider: c.provider,
                 model: c.model,
@@ -713,6 +786,16 @@ const server = Bun.serve({
       // digest email links to.
       const digestResponse = await handleDigestRoute(req, p, { db, appUrl: config.appUrl });
       if (digestResponse) return digestResponse;
+
+      // Stored report pages (/ticker/<SYMBOL>, /reports) and the regenerate
+      // endpoint. Must come before the SPA fallback, which would otherwise
+      // answer /ticker/NVDA with index.html.
+      const reportResponse = await handleReportRoute(req, p, {
+        db,
+        appUrl: config.appUrl,
+        buildReport: tickerDetail,
+      });
+      if (reportResponse) return reportResponse;
 
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
 
