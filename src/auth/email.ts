@@ -15,6 +15,11 @@ export interface MailMessage {
   subject: string;
   text: string;
   html: string;
+  /**
+   * Extra SMTP headers. Bulk mail (the watchlist digest) uses this for the RFC
+   * 8058 `List-Unsubscribe` pair; transactional mail leaves it unset.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface MailResult {
@@ -107,6 +112,7 @@ export class Mailer {
           subject: msg.subject,
           text: msg.text,
           html: msg.html,
+          ...(msg.headers ? { headers: msg.headers } : {}),
         }),
         signal: AbortSignal.timeout(20_000),
       });
@@ -132,6 +138,10 @@ export class Mailer {
       form.append("subject", msg.subject);
       form.append("text", msg.text);
       form.append("html", msg.html);
+      // Mailgun carries arbitrary headers as `h:<Name>` form fields.
+      for (const [name, value] of Object.entries(msg.headers ?? {})) {
+        form.append(`h:${name}`, value);
+      }
       const auth = Buffer.from(`api:${this.opts.mailgunApiKey}`).toString("base64");
       const res = await fetch(
         `https://api.mailgun.net/v3/${this.opts.mailgunDomain}/messages`,

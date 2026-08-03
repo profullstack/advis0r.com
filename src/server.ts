@@ -31,6 +31,8 @@ import { CoinPayClient } from "./credits/coinpay.ts";
 import { handleCreditsRoute } from "./credits/routes.ts";
 import { COST_PER_ANALYSIS, refundCredits, spendCredits } from "./credits/ledger.ts";
 import { handleWatchlistRoute } from "./auth/watchlist.ts";
+import { handleDigestRoute } from "./digest/routes.ts";
+import { startDigestScheduler } from "./digest/run.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
 const config = loadConfig();
@@ -59,6 +61,27 @@ const authDeps = {
 };
 console.log(
   `auth: email transport = ${mailer.transport}${mailer.configured ? ` (from ${mailer.from})` : " — verification emails will NOT be sent"}`,
+);
+
+// Watchlist digests. The scheduler is a background tick inside this process:
+// it needs no external cron, and `digest_sends` makes the repeated ticks (and a
+// second server, should one ever run) safe. Set DIGEST_SCHEDULER=0 to run the
+// send from cron instead — `transcripts digest send`.
+const digestDeps = {
+  db,
+  mailer,
+  market: registry.alpaca,
+  appUrl: config.appUrl,
+  marketSource: registry.marketSource,
+};
+const digestSchedulerEnabled = process.env.DIGEST_SCHEDULER !== "0" && mailer.configured;
+startDigestScheduler(digestDeps, { enabled: digestSchedulerEnabled });
+console.log(
+  `digest: scheduler ${
+    digestSchedulerEnabled
+      ? "on — watchlist emails go out at the 04:00 ET pre-market open"
+      : `off${mailer.configured ? " (DIGEST_SCHEDULER=0)" : " — no email transport configured"}`
+  }`,
 );
 
 const port = Number(process.env.PORT ?? 8080);
@@ -342,6 +365,8 @@ const server = Bun.serve({
             "GET /api/signals?ticker=": "extracted signals for a ticker",
             "GET /api/ticker?symbol=": "full detail: quote, technicals, bars, fundamentals, signals, analysis",
             "GET /api/discover?topic=&provider=offline&horizon=2&limit=": "ranked watchlist",
+            "GET /api/digest": "your watchlist email frequency (requires sign-in)",
+            "POST /api/digest": "set frequency: daily | weekly | off",
           },
           disclaimer: DISCLAIMER,
         });
@@ -683,6 +708,11 @@ const server = Bun.serve({
 
       const creditsResponse = await handleCreditsRoute(req, p, { db, coinpay, appUrl: config.appUrl });
       if (creditsResponse) return creditsResponse;
+
+      // Digest preferences, plus the login-free unsubscribe endpoint every
+      // digest email links to.
+      const digestResponse = await handleDigestRoute(req, p, { db, appUrl: config.appUrl });
+      if (digestResponse) return digestResponse;
 
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
 
