@@ -414,7 +414,10 @@ export function renderMissingReportPage(ticker: string, opts: ReportPageOptions)
          fundamentals and indexed coverage, then this page serves that snapshot from
          then on.</p>
       <p><a class="rp-cta" href="/?ticker=${encodeURIComponent(ticker)}">Generate the ${e(ticker)} report</a></p>
-      <p class="rp-note"><a href="/reports">Browse existing reports</a></p>
+      <p class="rp-note">
+        Not the right symbol? <a href="/?lookup=${encodeURIComponent(ticker)}">Search by company name</a>
+        · <a href="/reports">Browse existing reports</a>
+      </p>
     </article>`,
   );
 }

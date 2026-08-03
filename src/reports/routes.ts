@@ -42,6 +42,11 @@ export interface ReportRouteDeps {
   appUrl: string;
   /** Recompute a ticker's full payload from live sources. Owned by the server. */
   buildReport: (symbol: string) => Promise<ReportPayload>;
+  /**
+   * Resolve free text to a symbol, for /ticker/<something-that-is-not-a-ticker>.
+   * Optional so the report routes stay usable without the symbol directory.
+   */
+  suggest?: (query: string) => Promise<{ symbol: string; name: string } | null>;
 }
 
 const json = (body: unknown, status = 200) =>
@@ -119,8 +124,18 @@ export async function handleReportRoute(
     const raw = decodeURIComponent(path.slice("/ticker/".length)).replace(/\/$/, "");
     const symbol = normalizeSymbol(raw);
     if (!symbol) {
+      // /ticker/rivian is someone guessing a URL from a company name. Sending
+      // them to the right page beats a dead end — that guess is exactly the
+      // behaviour the symbol directory exists to rescue.
+      const hit = await deps.suggest?.(raw).catch(() => null);
+      if (hit) {
+        return Response.redirect(
+          `${deps.appUrl.replace(/\/$/, "")}/ticker/${encodeURIComponent(hit.symbol)}`,
+          302,
+        );
+      }
       return html(
-        renderMissingReportPage(raw.slice(0, 12) || "—", { appUrl: deps.appUrl }),
+        renderMissingReportPage(raw.slice(0, 24) || "—", { appUrl: deps.appUrl }),
         404,
       );
     }
