@@ -671,7 +671,74 @@ function sharpen(ticker) {
   };
 }
 
+/* ---- Stored report snapshots ----
+   A report is generated once and served from storage thereafter, so the modal
+   has to say *when* the snapshot was taken — a stale price is fine, a stale
+   price presented as live is not. Regeneration is offered for tickers on the
+   signed-in user's watchlist; the server enforces the same rule. */
+
+let detailReport = null; // the payload currently shown in the modal
+
+function timeAgo(iso) {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "unknown";
+  const s = Math.max(0, (Date.now() - then) / 1000);
+  if (s < 45) return "just now";
+  const units = [[60, "second"], [3600, "minute"], [86400, "hour"], [604800, "day"], [2629800, "week"], [31557600, "month"]];
+  let div = 1;
+  for (const [limit, name] of units) {
+    if (s < limit) { const v = Math.round(s / div); return `${v} ${name}${v === 1 ? "" : "s"} ago`; }
+    div = limit;
+  }
+  const y = Math.round(s / 31557600);
+  return `${y} year${y === 1 ? "" : "s"} ago`;
+}
+
+function reportMetaHtml(d) {
+  if (!d || !d.reportGeneratedAt) return "";
+  const ticker = d.ticker;
+  const watching = myTickers.has(ticker);
+  const regen = watching
+    ? `<button class="rp-regen" data-regen="${esc(ticker)}" title="Rebuild this report from live market data">↻ Regenerate</button>`
+    : authState.user
+      ? `<span class="rp-hint">Add to your watchlist to regenerate</span>`
+      : "";
+  return `<span class="rp-stamp-t">Snapshot ${esc(timeAgo(d.reportGeneratedAt))}</span>
+    <a class="rp-permalink" href="/ticker/${encodeURIComponent(ticker)}" target="_blank" rel="noopener">Full report ↗</a>
+    ${regen}`;
+}
+
+function renderReportMeta() {
+  const el = document.getElementById("dl-report-meta");
+  if (el && detailReport) el.innerHTML = reportMetaHtml(detailReport);
+}
+
+async function regenerateReport(ticker) {
+  const el = document.getElementById("dl-report-meta");
+  if (el) el.innerHTML = `<span class="rp-stamp-t">Rebuilding ${esc(ticker)} from live market data…</span>`;
+  try {
+    const res = await fetch("/api/report/regenerate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ ticker }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Regenerate failed (${res.status})`);
+    // The response *is* the fresh report, so re-render from it directly.
+    renderDetail(data);
+  } catch (e) {
+    if (el) el.innerHTML = `<span class="rp-hint bad">${esc(e.message)}</span>`;
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-regen]");
+  if (b) { e.preventDefault(); regenerateReport(b.dataset.regen); }
+});
+
 function renderDetail(d) {
+  detailReport = d;
   const t = d.technical || {};
   const f = d.facts || {};
   const a = d.analysis || {};
@@ -725,6 +792,7 @@ function renderDetail(d) {
         <div class="sub">${chg != null ? `<span class="${chg >= 0 ? "sig-dir positive" : "sig-dir negative"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span> · ` : ""}${d.delayed ? "delayed" : "live"} · ${esc(d.marketSource)}</div>
       </div>
     </div>
+    <div class="rp-meta" id="dl-report-meta">${reportMetaHtml(d)}</div>
     <div id="dl-watch-promo"></div>
 
     <div class="chartbox">
@@ -768,6 +836,7 @@ function renderDetail(d) {
         ${kv("Debt", fmtBig(f.totalDebt))}
         ${kv("Runway", f.runwayMonths != null ? fmtNum(f.runwayMonths, 1) + " mo" : "—")}
       </div>
+      ${d.factsError ? `<p class="src-note">SEC EDGAR was unavailable for this snapshot (${esc(d.factsError)}). Regenerate to fill these in.</p>` : ""}
     </div>
 
     ${analysisBlock(d)}
@@ -801,6 +870,7 @@ async function openTicker(sym) {
 function closeDetail() {
   destroyCharts();
   detailTicker = null;
+  detailReport = null;
   $("#detail").classList.add("hidden");
   document.body.style.overflow = "";
 }
@@ -858,7 +928,9 @@ function renderMyWatchlist(items) {
   list.innerHTML = items.length
     ? items.map((i) => `<div class="card wl-row" data-ticker="${esc(i.ticker)}">
         <div class="wl-main">
-          <a href="#" class="wl-tick" data-detail="${esc(i.ticker)}">${esc(i.ticker)}</a>
+          <!-- A real href so the report can be opened in a new tab or shared;
+               the click handler intercepts it and opens the modal instead. -->
+          <a href="/ticker/${encodeURIComponent(i.ticker)}" class="wl-tick" data-detail="${esc(i.ticker)}">${esc(i.ticker)}</a>
           ${i.note ? `<span class="wl-note">${esc(i.note)}</span>` : ""}
         </div>
         <button class="wl-remove" data-remove="${esc(i.ticker)}" title="Remove from watchlist">Remove</button>
@@ -866,6 +938,9 @@ function renderMyWatchlist(items) {
     : `<div class="empty">Nothing saved yet. Add a ticker above, or use “+ Watchlist” on any Discover result.</div>`;
   // Keep Discover buttons in sync with what is now saved.
   document.querySelectorAll("[data-watch]").forEach(syncWatchButton);
+  // Adding the open ticker to the watchlist is what unlocks its Regenerate
+  // button, so the modal's meta bar has to re-render with it.
+  renderReportMeta();
 }
 
 function syncWatchButton(btn) {
@@ -941,6 +1016,9 @@ function renderDetailWatch() {
   if (slot && detailTicker) slot.innerHTML = detailWatchButton(detailTicker);
   const promo = document.getElementById("dl-watch-promo");
   if (promo && authState.user) promo.innerHTML = "";
+  // Watchlist membership is what unlocks regeneration, so the meta bar has to
+  // follow every change to it.
+  renderReportMeta();
 }
 
 document.addEventListener("click", (e) => {
