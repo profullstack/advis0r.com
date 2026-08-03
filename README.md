@@ -36,6 +36,9 @@ What is **fully implemented and working end-to-end**:
   `analyze-company`, and the web watchlist produce real ranked output with no
   external LLM keys.
 - **Web dashboard + PWA** and read-only HTTP API (`src/server.ts`).
+- **Watchlist email digests** — a market summary of the previous session (or the
+  previous week) delivered as pre-market trading opens, 04:00 ET. See
+  [Email digests](#email-digests).
 
 What is **fully implemented**:
 
@@ -157,6 +160,58 @@ environment variables (see `.env.example`):
 | `DATABASE_URL` | `file:./data/transcripts.sqlite` or `libsql://…` (Turso) |
 | `DATABASE_AUTH_TOKEN` | Turso auth token (remote only) |
 | `SEC_USER_AGENT` | Required descriptive UA for SEC EDGAR |
+| `RESEND_API_KEY` / `MAILGUN_API_KEY` | Transactional + digest email transport |
+| `APP_URL` | Public base URL used for links in emails |
+| `DIGEST_SCHEDULER` | `0` disables the built-in 04:00 ET digest scheduler |
+
+## Email digests
+
+Signed-in users get a market summary of the tickers on their saved watchlist,
+delivered when US pre-market trading opens (**04:00 America/New_York**) on
+trading days. Frequency is set on the Watchlist tab:
+
+| Choice | When it arrives | What it covers |
+|---|---|---|
+| `daily` (**default**) | Every trading day | The previous trading session |
+| `weekly` | The week's first trading day | Every session of the week just closed |
+| `off` | — | Nothing |
+
+Each message contains broad-market context (SPY/QQQ/IWM/DIA), a per-ticker table
+(close, change vs. the pre-window close, volume or weekly range), any indexed
+news for those tickers, the mandatory disclaimer, and a working unsubscribe link
+plus RFC 8058 one-click headers.
+
+Delivery rules, all enforced server-side:
+
+- Only **verified, enabled accounts with a non-empty watchlist** are mailed.
+- Delivery is **at-most-once per period** — `digest_sends` has a
+  `UNIQUE(user_id, period_key)` interlock, so a duplicated cron run, a restart,
+  or two servers cannot send the same summary twice.
+- A run more than 6 hours past the open is **skipped rather than sent late**.
+- A failed send releases its claim so a later run inside that window retries.
+- A ticker with no market data is reported as unavailable; nothing is
+  interpolated.
+
+The server runs the schedule itself — no cron needed. Set `DIGEST_SCHEDULER=0`
+to drive it externally instead:
+
+```cron
+# Every 15 minutes; the ledger makes the extra runs no-ops.
+*/15 8-14 * * 1-5  cd /srv/advis0r && bun run cli digest send >> /var/log/digest.log 2>&1
+```
+
+```bash
+bun run cli digest send                       # send whatever is due now
+bun run cli digest send --dry-run --force     # build it, send nothing
+bun run cli digest preview you@example.com    # print the exact email
+bun run cli digest status                     # subscriber counts
+bun run cli digest status you@example.com     # one account's history
+bun run cli digest set you@example.com weekly # change a frequency
+```
+
+The API surface is `GET /api/digest` and `POST /api/digest {frequency}` (both
+require a session), plus `GET|POST /unsubscribe?token=…`, which deliberately
+needs no sign-in.
 
 ## Architecture
 

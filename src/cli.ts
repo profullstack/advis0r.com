@@ -481,6 +481,154 @@ async function findUserByEmail(
   return row ? { id: String(row.id), email: String(row.email) } : null;
 }
 
+// --- digest ---------------------------------------------------------------
+// Watchlist email digests. The server runs these on its own schedule; these
+// commands exist for cron-based deployments (DIGEST_SCHEDULER=0), for previewing
+// what a subscriber would receive, and for answering "did it go out?".
+const digest = program
+  .command("digest")
+  .description("Watchlist email digests: send, preview, and inspect subscriptions.");
+
+digest
+  .command("send")
+  .description("Send any digest that is due now. Safe to run repeatedly (at-most-once per period).")
+  .option("--daily", "restrict to the daily digest")
+  .option("--weekly", "restrict to the weekly digest")
+  .option("--force", "ignore the trading-day and pre-market-open gates", false)
+  .option("--dry-run", "build and report, but send nothing", false)
+  .option("--email <address>", "send only to this subscriber (ignores the send ledger)")
+  .action(async (opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const { Mailer } = await import("./auth/email.ts");
+      const { runDigests } = await import("./digest/run.ts");
+      const mailer = new Mailer({
+        resendApiKey: config.secrets.resendApiKey,
+        mailgunApiKey: config.secrets.mailgunApiKey,
+        mailgunDomain: config.secrets.mailgunDomain,
+        from: config.secrets.mailFrom || undefined,
+      });
+      if (!mailer.configured && !opts.dryRun) {
+        console.error("No email transport configured — set RESEND_API_KEY or MAILGUN_API_KEY.");
+      }
+      const result = await runDigests(
+        { db, mailer, market: registry.alpaca, appUrl: config.appUrl, marketSource: registry.marketSource },
+        {
+          force: Boolean(opts.force),
+          dryRun: Boolean(opts.dryRun),
+          onlyEmail: opts.email,
+          only: opts.daily ? "daily" : opts.weekly ? "weekly" : undefined,
+          onProgress: (m) => console.log(m),
+        },
+      );
+      if (!result.ran) return console.log(`Nothing due: ${result.skipped}`);
+      for (const w of result.windows) {
+        console.log(
+          `${w.frequency.padEnd(6)} ${w.periodKey.padEnd(22)} covering ${w.sessions.join(", ")}\n` +
+          `  recipients ${w.recipients}  sent ${w.sent}  failed ${w.failed}  skipped ${w.skipped}`,
+        );
+      }
+      if (opts.dryRun) console.log("(dry run — no mail was sent and no period was consumed)");
+    });
+  });
+
+digest
+  .command("preview <email>")
+  .description("Print the digest this account would receive, without sending it.")
+  .option("--weekly", "render the weekly digest instead of the daily one", false)
+  .option("--html", "print the HTML body instead of the plain-text one", false)
+  .action(async (email: string, opts) => {
+    await withApp(async ({ config, db, registry }) => {
+      const { digestsDue } = await import("./digest/schedule.ts");
+      const { listWatchlist } = await import("./auth/watchlist.ts");
+      const { unsubscribeToken } = await import("./digest/preferences.ts");
+      const { buildMarketSummary, summaryForTickers } = await import("./digest/summary.ts");
+      const { renderDigest } = await import("./digest/render.ts");
+
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const tickers = (await listWatchlist(db, user.id)).map((i) => i.ticker);
+      if (!tickers.length) return console.error(`${email} has an empty watchlist — nothing to send.`);
+
+      const wanted = opts.weekly ? "weekly" : "daily";
+      const window = digestsDue(new Date(), { force: true }).windows.find((w) => w.frequency === wanted);
+      if (!window) return console.error(`Could not build a ${wanted} window.`);
+
+      const summary = await buildMarketSummary(
+        { db, market: registry.alpaca, marketSource: registry.marketSource },
+        window,
+        tickers,
+      );
+      const message = renderDigest(summary, summaryForTickers(summary, tickers), {
+        appUrl: config.appUrl,
+        unsubscribeToken: await unsubscribeToken(db, user.id),
+      });
+      if (!message) return console.error("No market data for any watched ticker — nothing would be sent.");
+      console.log(`Subject: ${message.subject}\n`);
+      console.log(opts.html ? message.html : message.text);
+    });
+  });
+
+digest
+  .command("status [email]")
+  .description("Show digest subscriptions, or one account's frequency and recent sends.")
+  .action(async (email?: string) => {
+    await withApp(async ({ db }) => {
+      const { getPreference } = await import("./digest/preferences.ts");
+      if (!email) {
+        const rs = await db.execute(
+          `SELECT COALESCE(digest_frequency, 'daily') AS f, COUNT(*) AS n
+           FROM users WHERE email_verified_at IS NOT NULL AND COALESCE(disabled, 0) = 0
+           GROUP BY f ORDER BY n DESC`,
+        );
+        console.log("Verified accounts by digest frequency:");
+        for (const r of rs.rows) console.log(`  ${String(r.f).padEnd(7)} ${r.n}`);
+        const due = await db.execute(
+          `SELECT COUNT(DISTINCT u.id) AS n FROM users u JOIN watchlist_items w ON w.user_id = u.id
+           WHERE COALESCE(u.digest_frequency, 'daily') != 'off'
+             AND u.email_verified_at IS NOT NULL AND COALESCE(u.disabled, 0) = 0`,
+        );
+        console.log(`Mailable (verified, subscribed, non-empty watchlist): ${due.rows[0]?.n ?? 0}`);
+        return;
+      }
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const pref = await getPreference(db, user.id);
+      console.log(`${email}`);
+      console.log(`  frequency:  ${pref.frequency}`);
+      console.log(`  last sent:  ${pref.lastSentAt ?? "never"}`);
+      console.log(`  next send:  ${pref.nextSendAt ?? "— (unsubscribed)"}`);
+      const rs = await db.execute({
+        sql: `SELECT period_key, covering, tickers, status, transport, error, created_at
+              FROM digest_sends WHERE user_id = ? ORDER BY created_at DESC LIMIT 10`,
+        args: [user.id],
+      });
+      if (rs.rows.length) {
+        console.log("  recent:");
+        for (const r of rs.rows) {
+          console.log(
+            `    ${String(r.created_at).slice(0, 19)}  ${String(r.period_key).padEnd(22)}` +
+            ` ${String(r.status).padEnd(7)} ${r.tickers} ticker(s)${r.error ? ` — ${r.error}` : ""}`,
+          );
+        }
+      }
+    });
+  });
+
+digest
+  .command("set <email> <frequency>")
+  .description("Set an account's digest frequency: daily | weekly | off.")
+  .action(async (email: string, frequency: string) => {
+    await withApp(async ({ db }) => {
+      const { setPreference } = await import("./digest/preferences.ts");
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const result = await setPreference(db, user.id, frequency);
+      if (!result.ok) return console.error(result.error);
+      console.log(`${email}: digest frequency is now ${result.preference!.frequency}.`);
+      console.log(`  next send: ${result.preference!.nextSendAt ?? "— (unsubscribed)"}`);
+    });
+  });
+
 // --- reclassify -----------------------------------------------------------
 program
   .command("reclassify")

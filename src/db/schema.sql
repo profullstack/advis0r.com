@@ -370,7 +370,14 @@ CREATE TABLE IF NOT EXISTS users (
   created_at        TEXT NOT NULL,
   updated_at        TEXT,
   last_login_at     TEXT,
-  disabled          INTEGER NOT NULL DEFAULT 0
+  disabled          INTEGER NOT NULL DEFAULT 0,
+  -- Watchlist email digests. Daily by default, per product decision; the digest
+  -- only goes to verified addresses that actually have a watchlist.
+  digest_frequency  TEXT NOT NULL DEFAULT 'daily',   -- daily | weekly | off
+  digest_last_sent_at TEXT,
+  -- Plaintext by design: it has to be printable in every email and its only
+  -- capability is turning mail off. Nothing readable or changeable hangs off it.
+  digest_unsub_token  TEXT
 );
 
 -- Opaque session tokens. Only the SHA-256 of the token is stored, so a database
@@ -440,6 +447,24 @@ CREATE TABLE IF NOT EXISTS credit_purchases (
   updated_at    TEXT
 );
 
+-- Digest delivery ledger. UNIQUE(user_id, period_key) is the interlock that
+-- makes delivery at-most-once: a cron that fires twice, or two servers running
+-- the scheduler, cannot both win the insert and mail the same summary twice.
+CREATE TABLE IF NOT EXISTS digest_sends (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  frequency     TEXT NOT NULL,            -- daily | weekly
+  period_key    TEXT NOT NULL,            -- daily:2026-08-03 | weekly:2026-W31
+  covering      TEXT NOT NULL,            -- session(s) summarized, e.g. 2026-07-27..2026-07-31
+  tickers       INTEGER NOT NULL,
+  status        TEXT NOT NULL,            -- sending | sent | failed
+  transport     TEXT,
+  error         TEXT,
+  sent_at       TEXT,
+  created_at    TEXT NOT NULL,
+  UNIQUE(user_id, period_key)
+);
+
 -- Throttling for auth endpoints (login, signup, reset requests).
 CREATE TABLE IF NOT EXISTS auth_attempts (
   id            TEXT PRIMARY KEY,
@@ -457,6 +482,8 @@ CREATE INDEX IF NOT EXISTS idx_authtokens_user ON auth_tokens(user_id, kind);
 CREATE INDEX IF NOT EXISTS idx_authattempts_bucket ON auth_attempts(bucket, created_at);
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist_items(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_credits_user ON credits_ledger(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_digest_sends_period ON digest_sends(period_key, user_id);
+CREATE INDEX IF NOT EXISTS idx_users_digest ON users(digest_frequency);
 CREATE INDEX IF NOT EXISTS idx_purchases_user ON credit_purchases(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bars_ticker_tf ON market_bars(ticker, timeframe, ts);
 CREATE INDEX IF NOT EXISTS idx_analyses_ticker ON analyses(ticker, as_of);

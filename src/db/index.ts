@@ -48,6 +48,14 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     start_ms: "INTEGER",
     provenance: "TEXT",
   },
+  // Watchlist email digests. Existing accounts inherit the 'daily' default, so
+  // the feature is opt-out rather than opt-in — but delivery is still gated on a
+  // verified address and a non-empty watchlist.
+  users: {
+    digest_frequency: "TEXT NOT NULL DEFAULT 'daily'",
+    digest_last_sent_at: "TEXT",
+    digest_unsub_token: "TEXT",
+  },
 };
 
 /**

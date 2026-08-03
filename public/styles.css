@@ -273,6 +273,23 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .wl-note { color: var(--dim, #8b95a5); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-remove { background: none; border: 1px solid rgba(255,255,255,.14); color: var(--dim, #8b95a5);
   border-radius: 6px; padding: .2rem .55rem; font-size: .74rem; cursor: pointer; font-family: inherit; }
+
+/* ---- Watchlist email digest frequency ---- */
+.digest-prefs:empty { display: none; }
+.digest-prefs {
+  margin: 0 0 16px; padding: 12px 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+}
+.digest-row { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+.digest-lab { font-size: .82rem; font-weight: 600; letter-spacing: .01em; }
+.digest-opts { display: inline-flex; gap: 4px; padding: 3px; border-radius: 8px; background: rgba(255,255,255,.04); }
+.digest-opt {
+  background: none; border: 0; color: var(--dim); font-family: inherit; font-size: .78rem;
+  padding: .28rem .7rem; border-radius: 6px; cursor: pointer;
+}
+.digest-opt:hover { color: var(--text); }
+.digest-opt.on { background: var(--accent); color: var(--bg); font-weight: 600; }
+.digest-next { color: var(--dim); font-size: .76rem; margin: .55rem 0 0; line-height: 1.5; }
 .wl-remove:hover { border-color: #ff8f8f; color: #ff8f8f; }
 
 /* ---- AI analysis sign-in promo ---- */

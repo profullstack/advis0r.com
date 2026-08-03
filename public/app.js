@@ -221,6 +221,11 @@ async function boot() {
   const start = (location.hash || "#watchlist").slice(1);
   showView(["watchlist", "search", "signals", "about"].includes(start) ? start : "watchlist");
   runWatchlist();
+  // Deep link from a digest email: /?ticker=NVDA opens that stock's detail.
+  const wanted = new URL(location.href).searchParams.get("ticker");
+  if (wanted && /^[A-Za-z]{1,5}(\.[A-Za-z]{1,2})?$/.test(wanted)) {
+    openTicker(wanted.toUpperCase());
+  }
 }
 boot();
 
@@ -997,11 +1002,105 @@ document.getElementById("my-add")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("my-add-btn")?.click();
 });
 
+/* ---- Watchlist email digests ----
+   A daily (default) or weekly market summary of the saved tickers, sent when
+   pre-market trading opens. Signed-out visitors see the pitch instead of the
+   control — there is no per-device setting to offer them. */
+
+const DIGEST_CHOICES = [
+  { value: "daily", label: "Daily", hint: "Every trading day" },
+  { value: "weekly", label: "Weekly", hint: "Monday mornings" },
+  { value: "off", label: "Off", hint: "No emails" },
+];
+
+let digestPref = null;
+
+function digestWhen(iso) {
+  if (!iso) return "";
+  // The send time is defined in market terms, so show it that way rather than
+  // in the reader's local zone — "4:00 AM ET" is the promise being made.
+  return new Date(iso).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }) + " ET";
+}
+
+function renderDigestPrefs() {
+  const el = document.getElementById("email-updates");
+  if (!el) return;
+  if (!authState.user) { el.innerHTML = ""; return; }
+  if (!digestPref) {
+    el.innerHTML = `<div class="digest-row"><span class="digest-lab">Email updates</span>
+      <span class="digest-next">loading…</span></div>`;
+    return;
+  }
+  const options = DIGEST_CHOICES.map((c) => `<button class="digest-opt${
+    digestPref.frequency === c.value ? " on" : ""
+  }" data-digest="${c.value}" title="${esc(c.hint)}">${esc(c.label)}</button>`).join("");
+
+  const verified = authState.user.emailVerified;
+  const status = !verified
+    ? "Verify your email to start receiving updates."
+    : digestPref.frequency === "off"
+      ? "You are not receiving watchlist emails."
+      : `Next: ${digestWhen(digestPref.nextSendAt)} — a market summary of the previous ${
+          digestPref.frequency === "weekly" ? "week" : "session"
+        }, sent as pre-market opens.`;
+
+  el.innerHTML = `<div class="digest-row">
+      <span class="digest-lab">Email updates</span>
+      <span class="digest-opts">${options}</span>
+    </div>
+    <p class="digest-next" id="digest-note">${esc(status)}</p>`;
+}
+
+async function loadDigestPrefs() {
+  if (!authState.user) { digestPref = null; renderDigestPrefs(); return; }
+  try {
+    const res = await fetch("/api/digest", { credentials: "same-origin" });
+    digestPref = res.ok ? await res.json() : null;
+  } catch { digestPref = null; }
+  renderDigestPrefs();
+}
+
+async function setDigestFrequency(frequency) {
+  const previous = digestPref;
+  // Optimistic: the control should feel instant, and any failure restores it.
+  digestPref = { ...(digestPref || {}), frequency };
+  renderDigestPrefs();
+  try {
+    const res = await fetch("/api/digest", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ frequency }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Could not save that.");
+    digestPref = data;
+    renderDigestPrefs();
+  } catch (e) {
+    digestPref = previous;
+    renderDigestPrefs();
+    const note = document.getElementById("digest-note");
+    if (note) note.textContent = e.message;
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const opt = e.target.closest("[data-digest]");
+  if (opt) { e.preventDefault(); setDigestFrequency(opt.dataset.digest); }
+});
+
 // Load on first visit to the tab, and refresh after any auth change.
 document.addEventListener("click", (e) => {
-  if (e.target.closest('#tabs button[data-view="watchlist"]')) loadMyWatchlist();
+  if (e.target.closest('#tabs button[data-view="watchlist"]')) { loadMyWatchlist(); loadDigestPrefs(); }
 });
-window.addEventListener("advis0r:auth-changed", loadMyWatchlist);
+window.addEventListener("advis0r:auth-changed", () => { loadMyWatchlist(); loadDigestPrefs(); });
 
 
 /* ---- Sign-in promo for the AI analysis paths ----
