@@ -481,6 +481,79 @@ async function findUserByEmail(
   return row ? { id: String(row.id), email: String(row.email) } : null;
 }
 
+// --- symbols --------------------------------------------------------------
+// The name -> ticker directory behind /api/lookup. Syncing is optional: lookup
+// falls back to a keyless Yahoo search and caches what it finds. Syncing just
+// makes the common case local, and therefore fast enough for a typeahead.
+const symbols = program
+  .command("symbols")
+  .description("Ticker lookup directory: sync, search, inspect.");
+
+symbols
+  .command("sync")
+  .description("Load the full tradable-asset list into the local lookup directory.")
+  .action(async () => {
+    await withApp(async ({ db, registry }) => {
+      const { fetchAlpacaDirectory } = await import("./symbols/providers.ts");
+      const { upsertSymbols, directoryAge } = await import("./symbols/directory.ts");
+      const before = await directoryAge(db);
+      console.log(`Directory before: ${before.count} symbol(s)`);
+
+      let rows: Awaited<ReturnType<typeof fetchAlpacaDirectory>> = [];
+      try {
+        rows = await fetchAlpacaDirectory(registry.alpaca);
+      } catch (err) {
+        console.error(`Asset list unavailable: ${String(err).slice(0, 200)}`);
+      }
+      if (!rows.length) {
+        console.error(
+          "No bulk asset list available (Alpaca credentials required).\n" +
+          "Lookup still works — it falls back to a keyless Yahoo search and caches results.",
+        );
+        return;
+      }
+      const written = await upsertSymbols(db, rows);
+      const after = await directoryAge(db);
+      console.log(`Wrote ${written} symbol(s). Directory now: ${after.count}.`);
+    });
+  });
+
+symbols
+  .command("find <query...>")
+  .description('Look up a ticker by name or symbol (e.g. "rivian").')
+  .option("--limit <n>", "max results", "10")
+  .option("--local", "do not fall back to the remote search", false)
+  .action(async (query: string[], opts) => {
+    await withApp(async ({ db }) => {
+      const { lookupSymbols } = await import("./symbols/lookup.ts");
+      const result = await lookupSymbols(db, query.join(" "), {
+        limit: Number(opts.limit) || 10,
+        localOnly: Boolean(opts.local),
+      });
+      if (!result.matches.length) {
+        console.log(`No match for "${result.query}".`);
+        return;
+      }
+      for (const m of result.matches) {
+        console.log(`  ${m.symbol.padEnd(8)} ${String(m.exchange ?? "").padEnd(8)} ${m.name}`);
+      }
+      if (result.usedRemote) console.log("(remote search was consulted; results cached locally)");
+    });
+  });
+
+symbols
+  .command("status")
+  .description("Size and freshness of the lookup directory.")
+  .action(async () => {
+    await withApp(async ({ db }) => {
+      const { directoryAge } = await import("./symbols/directory.ts");
+      const { count, newest } = await directoryAge(db);
+      console.log(`symbols:     ${count}`);
+      console.log(`last update: ${newest ?? "never"}`);
+      if (!count) console.log("Run `transcripts symbols sync` to load the full asset list.");
+    });
+  });
+
 // --- digest ---------------------------------------------------------------
 // Watchlist email digests. The server runs these on its own schedule; these
 // commands exist for cron-based deployments (DIGEST_SCHEDULER=0), for previewing

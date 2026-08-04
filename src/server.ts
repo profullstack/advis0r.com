@@ -35,6 +35,8 @@ import { handleDigestRoute } from "./digest/routes.ts";
 import { startDigestScheduler } from "./digest/run.ts";
 import { handleReportRoute } from "./reports/routes.ts";
 import { loadReport, normalizeSymbol, saveReport } from "./reports/store.ts";
+import { handleLookupRoute } from "./symbols/routes.ts";
+import { resolveOne } from "./symbols/lookup.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
 const config = loadConfig();
@@ -425,6 +427,7 @@ const server = Bun.serve({
             "GET /api/reports?limit=&sort=": "the report index as JSON",
             "POST /api/report/regenerate": "rebuild one snapshot (watchlist members only)",
             "GET /api/discover?topic=&provider=offline&horizon=2&limit=": "ranked watchlist",
+            "GET /api/lookup?q=&limit=": "find a ticker by company name (e.g. q=rivian -> RIVN)",
             "GET /api/digest": "your watchlist email frequency (requires sign-in)",
             "POST /api/digest": "set frequency: daily | weekly | off",
           },
@@ -493,8 +496,23 @@ const server = Bun.serve({
       }
 
       if (p === "/api/ticker") {
-        const symbol = normalizeSymbol(url.searchParams.get("symbol"));
-        if (!symbol) return json({ error: "missing or invalid ?symbol=" }, 400);
+        const raw = url.searchParams.get("symbol") ?? "";
+        const symbol = normalizeSymbol(raw);
+        if (!symbol) {
+          // "rivian" lands here. Rejecting it without saying where to go next is
+          // how someone concludes the company simply is not covered.
+          const hit = raw.trim() ? await resolveOne(db, raw).catch(() => null) : null;
+          return json(
+            {
+              error: hit
+                ? `"${raw.trim()}" is not a ticker — did you mean ${hit.symbol} (${hit.name})?`
+                : `"${raw.trim()}" is not a ticker. Search by company name at /api/lookup?q=`,
+              didYouMean: hit ? { symbol: hit.symbol, name: hit.name } : undefined,
+              lookup: `/api/lookup?q=${encodeURIComponent(raw.trim().slice(0, 64))}`,
+            },
+            400,
+          );
+        }
         // Serves the stored snapshot. Rebuilding is a separate, authorized act
         // (POST /api/report/regenerate) so a crawler hammering this route cannot
         // spend our market-data quota.
@@ -790,10 +808,16 @@ const server = Bun.serve({
       // Stored report pages (/ticker/<SYMBOL>, /reports) and the regenerate
       // endpoint. Must come before the SPA fallback, which would otherwise
       // answer /ticker/NVDA with index.html.
+      // Name -> ticker. Before the report routes, so /api/lookup is never
+      // shadowed, and so a report page can offer suggestions on a miss.
+      const lookupResponse = await handleLookupRoute(req, p, { db });
+      if (lookupResponse) return lookupResponse;
+
       const reportResponse = await handleReportRoute(req, p, {
         db,
         appUrl: config.appUrl,
         buildReport: tickerDetail,
+        suggest: (q) => resolveOne(db, q, { localOnly: false }),
       });
       if (reportResponse) return reportResponse;
 

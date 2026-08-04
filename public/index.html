@@ -52,7 +52,14 @@
       <!-- Watchlist (per-user, requires sign-in) -->
       <section class="view" data-view="watchlist">
         <div class="controls">
-          <input id="my-add" type="search" placeholder="Add a ticker (e.g. NVDA)" autocomplete="off" maxlength="8" />
+          <!-- Accepts a company name as well as a ticker: "rivian" resolves to
+               RIVN through /api/lookup. maxlength is generous for that reason. -->
+          <div class="lookup" data-lookup="my-add">
+            <input id="my-add" type="search" placeholder="Add by ticker or company name (e.g. RIVN or Rivian)"
+                   autocomplete="off" maxlength="64" role="combobox" aria-expanded="false"
+                   aria-autocomplete="list" aria-controls="my-add-results" />
+            <div class="lookup-results" id="my-add-results" role="listbox" hidden></div>
+          </div>
           <button id="my-add-btn" class="primary">Add</button>
           <button id="my-import-btn" title="Load tickers from a CSV or a plain ticker list">Import</button>
           <button id="my-export-btn" title="Download your watchlist as a CSV, with last known prices">Export</button>
@@ -80,8 +87,12 @@
       <!-- Signals -->
       <section class="view" data-view="signals">
         <div class="controls">
-          <input id="sig-ticker" type="search" placeholder="Ticker (e.g. DGXX)" autocomplete="off" list="ticker-list" />
-          <datalist id="ticker-list"></datalist>
+          <div class="lookup" data-lookup="sig-ticker">
+            <input id="sig-ticker" type="search" placeholder="Ticker or company name (e.g. RIVN or Rivian)"
+                   autocomplete="off" maxlength="64" role="combobox" aria-expanded="false"
+                   aria-autocomplete="list" aria-controls="sig-ticker-results" />
+            <div class="lookup-results" id="sig-ticker-results" role="listbox" hidden></div>
+          </div>
           <button id="sig-run" class="primary">Load signals</button>
         </div>
         <div id="signals-out" class="results"></div>

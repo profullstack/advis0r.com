@@ -167,6 +167,43 @@ environment variables (see `.env.example`):
 | `APP_URL` | Public base URL used for links in emails |
 | `DIGEST_SCHEDULER` | `0` disables the built-in 04:00 ET digest scheduler |
 
+## Ticker lookup
+
+Type a company name anywhere a ticker is asked for and it resolves: **`rivian` → RIVN**.
+
+Before this, knowing the ticker was a precondition for using a tool whose job is
+to find tickers. `rivian` was rejected by the watchlist (over five letters),
+unusable in the signals box (which wants an exact symbol), and answered by
+full-text search with *Amazon's 10-Q* — because that filing mentions their
+Rivian stake.
+
+```bash
+curl "localhost:8080/api/lookup?q=rivian"      # -> RIVN
+curl "localhost:8080/api/lookup?q=coca+cola"   # -> KO
+bun run cli symbols find "berkshire hathaway"  # -> BRK.A, BRK.B
+```
+
+The watchlist and signals boxes are typeaheads over this, and the recovery paths
+are wired too: `/ticker/rivian` redirects to `/ticker/RIVN`, and
+`/api/ticker?symbol=rivian` answers with a `didYouMean` instead of a bare error.
+
+**Local-first.** `bun run cli symbols sync` loads the full tradable-asset list
+(~11k rows, Alpaca) so lookup is one indexed query with no third-party call —
+fast enough for a typeahead. Without Alpaca credentials it still works: a keyless
+Yahoo search covers the miss and the result is cached, so a given gap is paid for
+once. Single-character queries never leave the box.
+
+Ranking is the feature — exact symbol > symbol prefix > name prefix > word
+prefix > substring, with ties broken toward the primary listing (preferred
+exchange, then shorter symbol). That is what puts RIVN above its warrants, AAPL
+above Apple Hospitality REIT, and KO above Coca-Cola Consolidated.
+
+| Command | |
+|---|---|
+| `symbols sync` | Load the full asset list into the directory |
+| `symbols find <query>` | Look up a ticker by name or symbol |
+| `symbols status` | Directory size and freshness |
+
 ## Report pages
 
 Every ticker that has been looked at has a report at **`/ticker/<SYMBOL>`** — a

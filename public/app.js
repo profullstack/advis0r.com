@@ -44,10 +44,115 @@ async function loadHealthAndStats() {
       .map(([k, lab]) => `<div class="stat"><b>${s[k] ?? 0}</b><span>${lab}</span></div>`)
       .join("");
   } catch {}
-  try {
-    const { tickers } = await api("/api/tickers");
-    $("#ticker-list").innerHTML = tickers.map((t) => `<option value="${esc(t.ticker)}">`).join("");
-  } catch {}
+  // The signals box used to be backed by a <datalist> of indexed tickers, which
+  // only ever offered symbols we already had signals for — no help at all to
+  // someone typing a company name. It is a lookup box now (see attachLookup).
+}
+
+/* ---- Ticker lookup ----
+   Typing a company name used to be a dead end: the watchlist rejected anything
+   over five letters, the signals box wanted an exact symbol, and full-text
+   search answered "rivian" with Amazon's 10-Q, because that filing mentions
+   their stake. This turns any input into a name-or-symbol picker. */
+
+const LOOKUP_DEBOUNCE_MS = 180;
+
+function attachLookup(input, onSelect) {
+  const box = input.closest(".lookup");
+  const results = box?.querySelector(".lookup-results");
+  if (!box || !results) return;
+
+  let items = [];
+  let active = -1;
+  let timer = null;
+  // Monotonic token: a slow response for an earlier keystroke must never
+  // overwrite a newer one's results.
+  let seq = 0;
+
+  const close = () => {
+    results.hidden = true;
+    results.innerHTML = "";
+    items = [];
+    active = -1;
+    input.setAttribute("aria-expanded", "false");
+  };
+
+  const paint = () => {
+    if (!items.length) { close(); return; }
+    results.innerHTML = items
+      .map((m, i) => `<button type="button" class="lookup-row${i === active ? " on" : ""}"
+           role="option" aria-selected="${i === active}" data-i="${i}">
+        <span class="lookup-sym">${esc(m.symbol)}</span>
+        <span class="lookup-name">${esc(m.name)}</span>
+        <span class="lookup-meta">${esc(m.exchange || "")}${m.hasReport ? ' <span class="lookup-rep">report</span>' : ""}</span>
+      </button>`)
+      .join("");
+    results.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+  };
+
+  const choose = (i) => {
+    const m = items[i];
+    if (!m) return;
+    input.value = m.symbol;
+    close();
+    onSelect(m);
+  };
+
+  const search = async (q) => {
+    const mine = ++seq;
+    try {
+      const r = await fetch(`/api/lookup?q=${encodeURIComponent(q)}&limit=8`, { credentials: "same-origin" });
+      const data = await r.json();
+      if (mine !== seq) return; // a newer keystroke already won
+      items = data.matches || [];
+      active = items.length ? 0 : -1;
+      paint();
+    } catch {
+      if (mine === seq) close();
+    }
+  };
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (q.length < 1) { close(); return; }
+    timer = setTimeout(() => search(q), LOOKUP_DEBOUNCE_MS);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (results.hidden || !items.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); active = (active + 1) % items.length; paint(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = (active - 1 + items.length) % items.length; paint(); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); e.stopPropagation(); choose(active); }
+    else if (e.key === "Escape") { close(); }
+  });
+
+  results.addEventListener("mousedown", (e) => {
+    // mousedown, not click: blur fires first and would close the list.
+    const row = e.target.closest("[data-i]");
+    if (row) { e.preventDefault(); choose(Number(row.dataset.i)); }
+  });
+
+  input.addEventListener("blur", () => setTimeout(close, 120));
+
+  /** Resolve free text to one symbol for a submit that skipped the dropdown. */
+  return async function resolve(raw) {
+    const q = (raw ?? input.value).trim();
+    if (!q) return null;
+    if (/^[A-Za-z]{1,5}(\.[A-Za-z]{1,2})?$/.test(q)) return { symbol: q.toUpperCase() };
+    try {
+      const r = await fetch(`/api/lookup?q=${encodeURIComponent(q)}&limit=8`, { credentials: "same-origin" });
+      const { matches = [] } = await r.json();
+      if (matches.length === 1) return matches[0];
+      // Ambiguous: show the options rather than pick one. Putting the wrong
+      // company on someone's watchlist is worse than one more click.
+      items = matches; active = matches.length ? 0 : -1; paint();
+      return null;
+    } catch {
+      return null;
+    }
+  };
 }
 
 /* ---- Watchlist ---- */
@@ -195,9 +300,17 @@ $("#sq").addEventListener("keydown", (e) => e.key === "Enter" && runSearch());
 
 /* ---- Signals ---- */
 async function runSignals() {
-  const ticker = $("#sig-ticker").value.trim().toUpperCase();
+  const raw = $("#sig-ticker").value.trim();
   const out = $("#signals-out");
-  if (!ticker) return;
+  if (!raw) return;
+  // Accept a company name here too — the signals API only speaks symbols.
+  let ticker = raw.toUpperCase();
+  if (!/^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(ticker)) {
+    const m = resolveSignals ? await resolveSignals(raw) : null;
+    if (!m) return; // no confident match: the picker is showing the options
+    ticker = m.symbol;
+    $("#sig-ticker").value = ticker;
+  }
   out.innerHTML = `<div class="spinner"></div>`;
   try {
     const data = await api(`/api/signals?ticker=${encodeURIComponent(ticker)}`);
@@ -222,9 +335,22 @@ async function boot() {
   showView(["watchlist", "search", "signals", "about"].includes(start) ? start : "watchlist");
   runWatchlist();
   // Deep link from a digest email: /?ticker=NVDA opens that stock's detail.
-  const wanted = new URL(location.href).searchParams.get("ticker");
+  const params = new URL(location.href).searchParams;
+  const wanted = params.get("ticker");
   if (wanted && /^[A-Za-z]{1,5}(\.[A-Za-z]{1,2})?$/.test(wanted)) {
     openTicker(wanted.toUpperCase());
+  }
+  // Deep link from a "no report for that symbol" page: /?lookup=rivian lands on
+  // the watchlist with the picker already showing what they meant.
+  const lookup = params.get("lookup");
+  if (lookup) {
+    showView("watchlist");
+    const input = document.getElementById("my-add");
+    if (input) {
+      input.value = lookup.slice(0, 64);
+      input.focus();
+      input.dispatchEvent(new Event("input"));
+    }
   }
 }
 boot();
@@ -1055,7 +1181,14 @@ document.addEventListener("click", (e) => {
     e.preventDefault();
     const input = document.getElementById("my-add");
     const t = (input?.value || "").trim();
-    if (t) { toggleWatchAdd(t); if (input) input.value = ""; }
+    if (!t) return;
+    // "rivian" has to become RIVN before it reaches the watchlist API, which
+    // only accepts symbols. An ambiguous name opens the picker instead.
+    Promise.resolve(resolveWatchAdd ? resolveWatchAdd(t) : { symbol: t }).then((m) => {
+      if (!m) return;
+      toggleWatchAdd(m.symbol);
+      if (input) input.value = "";
+    });
     return;
   }
   const rm = e.target.closest("[data-remove]");
@@ -1076,7 +1209,14 @@ async function toggleWatchAdd(ticker) {
   }
 }
 
+/* Both boxes accept a company name. Picking from the dropdown acts straight
+   away; typing a name and hitting Enter/Add resolves it first. */
+const resolveWatchAdd = attachLookup(document.getElementById("my-add"), (m) => toggleWatchAdd(m.symbol));
+const resolveSignals = attachLookup(document.getElementById("sig-ticker"), () => runSignals());
+
 document.getElementById("my-add")?.addEventListener("keydown", (e) => {
+  // The lookup handler stops propagation when it consumes Enter to pick a row,
+  // so reaching here means the user submitted raw text.
   if (e.key === "Enter") document.getElementById("my-add-btn")?.click();
 });
 

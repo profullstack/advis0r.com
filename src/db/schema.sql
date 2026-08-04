@@ -28,6 +28,30 @@ CREATE TABLE IF NOT EXISTS tickers (
   active        INTEGER DEFAULT 1
 );
 
+-- Searchable directory of tradable symbols, so a visitor can type "rivian" and
+-- get RIVN. Without it the app only ever accepted an exact ticker: the watchlist
+-- rejected anything over five letters, and full-text search answered "rivian"
+-- with Amazon's 10-Q, because that filing mentions their stake. Knowing the
+-- ticker was a precondition for using a tool whose job is to find tickers.
+--
+-- Populated in bulk from the Alpaca asset list when credentials exist, and
+-- lazily from Yahoo's search endpoint otherwise, so lookup works keyless.
+CREATE TABLE IF NOT EXISTS symbols (
+  symbol        TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  exchange      TEXT,
+  asset_class   TEXT,
+  status        TEXT,                    -- active | inactive
+  tradable      INTEGER NOT NULL DEFAULT 1,
+  source        TEXT NOT NULL,           -- alpaca | yahoo
+  updated_at    TEXT NOT NULL,
+  -- Name in its match form: lowercased with punctuation collapsed to spaces, so
+  -- "coca cola" finds The Coca-Cola Company. Stored rather than computed per
+  -- query, because an expression LIKE cannot use an index and this table is
+  -- scanned on every keystroke of a typeahead.
+  name_search   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS executives (
   id            TEXT PRIMARY KEY,
   company_id    TEXT REFERENCES companies(id),
@@ -508,6 +532,8 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist_items(user_id, create
 CREATE INDEX IF NOT EXISTS idx_credits_user ON credits_ledger(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_digest_sends_period ON digest_sends(period_key, user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_generated ON reports(generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name_search);
+CREATE INDEX IF NOT EXISTS idx_symbols_updated ON symbols(updated_at);
 CREATE INDEX IF NOT EXISTS idx_reports_score ON reports(overall_score DESC);
 CREATE INDEX IF NOT EXISTS idx_users_digest ON users(digest_frequency);
 CREATE INDEX IF NOT EXISTS idx_purchases_user ON credit_purchases(user_id, created_at);
