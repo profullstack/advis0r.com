@@ -1080,6 +1080,56 @@ document.getElementById("my-add")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("my-add-btn")?.click();
 });
 
+/* ---- Watchlist import / export ----
+   Export is a plain link to the API with ?format=csv, so the browser handles
+   the download and the file is whatever the server says it is. Import posts
+   the file's text and lets the server parse it. */
+
+function setMySummary(text) {
+  const summary = document.getElementById("my-summary");
+  if (summary) summary.textContent = text;
+}
+
+/** Summarize an import for the user — including what it refused. */
+function importSummary(r) {
+  const parts = [`Imported ${r.added.length} ticker${r.added.length === 1 ? "" : "s"}`];
+  if (r.skipped?.length) parts.push(`${r.skipped.length} already saved`);
+  if (r.invalid?.length) parts.push(`${r.invalid.length} not recognized`);
+  if (r.capped) parts.push("watchlist full — some were not added");
+  return `${parts.join(" · ")}.`;
+}
+
+async function importWatchlistFile(file) {
+  if (!file) return;
+  const text = await file.text().catch(() => "");
+  if (!text.trim()) { setMySummary("That file was empty."); return; }
+  try {
+    const res = await wlApi("POST", { csv: text });
+    renderMyWatchlist(res.items || []);
+    setMySummary(importSummary(res));
+  } catch (e) {
+    if (e.authRequired) { openAuth("login"); return; }
+    setMySummary(e.message);
+  }
+}
+
+document.getElementById("my-import-btn")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  document.getElementById("my-import-file")?.click();
+});
+
+document.getElementById("my-import-file")?.addEventListener("change", (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = ""; // allow re-importing the same file
+  importWatchlistFile(file);
+});
+
+document.getElementById("my-export-btn")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!myTickers.size) { setMySummary("Nothing to export yet."); return; }
+  window.location.href = "/api/watchlist?format=csv";
+});
+
 /* ---- Watchlist email digests ----
    A daily (default) or weekly market summary of the saved tickers, sent when
    pre-market trading opens. Signed-out visitors see the pitch instead of the
