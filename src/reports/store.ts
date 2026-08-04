@@ -198,6 +198,38 @@ export async function countReports(db: Client): Promise<number> {
   return Number(rs.rows[0]?.n ?? 0);
 }
 
+/**
+ * Last known price per ticker, straight off the denormalized report columns —
+ * no payload parsing, one query for the whole set. Tickers with no stored
+ * report are simply absent from the result, so callers render a blank rather
+ * than a fabricated price. Used by the watchlist CSV export.
+ */
+export async function reportPrices(
+  db: Client,
+  tickers: string[],
+): Promise<Record<string, { lastPrice?: number; generatedAt?: string }>> {
+  const wanted = [...new Set(tickers.map((t) => normalizeSymbol(t)).filter((t): t is string => t !== null))];
+  if (wanted.length === 0) return {};
+
+  const out: Record<string, { lastPrice?: number; generatedAt?: string }> = {};
+  // Chunked so a long watchlist cannot outgrow SQLite's bound-parameter limit.
+  for (let i = 0; i < wanted.length; i += 100) {
+    const chunk = wanted.slice(i, i + 100);
+    const rs = await db.execute({
+      sql: `SELECT ticker, last_price, generated_at FROM reports
+            WHERE ticker IN (${chunk.map(() => "?").join(",")})`,
+      args: chunk,
+    });
+    for (const row of rs.rows) {
+      out[String(row.ticker)] = {
+        lastPrice: num(row.last_price),
+        generatedAt: row.generated_at ? String(row.generated_at) : undefined,
+      };
+    }
+  }
+  return out;
+}
+
 /** Every ticker with a stored report, oldest generation first — for the sitemap. */
 export async function allReportRefs(
   db: Client,

@@ -15,6 +15,8 @@ import type { Client } from "@libsql/client";
 import { newId } from "./crypto.ts";
 import { SESSION_COOKIE, readCookie } from "./routes.ts";
 import { userForSession, type PublicUser } from "./service.ts";
+import { reportPrices } from "../reports/store.ts";
+import { WATCHLIST_CSV_FILENAME, formatWatchlistCsv, parseWatchlistCsv } from "./watchlist-csv.ts";
 
 /** Tickers per user. Generous, but bounded so one account cannot fill the table. */
 export const MAX_WATCHLIST_ITEMS = 200;
@@ -72,6 +74,63 @@ export async function addToWatchlist(
   return { ok: true, ticker };
 }
 
+export interface BulkAddResult {
+  /** Tickers newly saved. */
+  added: string[];
+  /** Valid tickers that were already on the list. */
+  skipped: string[];
+  /** Tokens that were not plausible tickers. */
+  invalid: string[];
+  /** Set when the per-user cap cut the import short. */
+  capped?: boolean;
+}
+
+/**
+ * Add many tickers in one pass — the import path.
+ *
+ * The cap is checked once up front and then counted down locally rather than
+ * re-queried per row, so a large file is one COUNT plus one INSERT per new
+ * ticker. Rows past the cap are reported instead of silently dropped: an import
+ * that quietly loses half a file is worse than one that says it did.
+ */
+export async function addManyToWatchlist(
+  db: Client,
+  userId: string,
+  entries: Array<{ ticker: string; note?: string }>,
+): Promise<BulkAddResult> {
+  const result: BulkAddResult = { added: [], skipped: [], invalid: [] };
+
+  const existing = await listWatchlist(db, userId);
+  const have = new Set(existing.map((i) => i.ticker));
+  let room = MAX_WATCHLIST_ITEMS - have.size;
+
+  for (const entry of entries) {
+    const ticker = normalizeTicker(entry.ticker);
+    if (!ticker) {
+      result.invalid.push(String(entry.ticker ?? ""));
+      continue;
+    }
+    if (have.has(ticker)) {
+      result.skipped.push(ticker);
+      continue;
+    }
+    if (room <= 0) {
+      result.capped = true;
+      break;
+    }
+    await db.execute({
+      sql: `INSERT OR IGNORE INTO watchlist_items (id, user_id, ticker, note, created_at)
+            VALUES (?,?,?,?,?)`,
+      args: [newId("wl"), userId, ticker, entry.note?.slice(0, 500) ?? null, new Date().toISOString()],
+    });
+    have.add(ticker);
+    room -= 1;
+    result.added.push(ticker);
+  }
+
+  return result;
+}
+
 export async function removeFromWatchlist(
   db: Client,
   userId: string,
@@ -113,7 +172,19 @@ export async function handleWatchlistRoute(
   }
 
   if (req.method === "GET") {
-    return json({ items: await listWatchlist(db, user.id) });
+    const items = await listWatchlist(db, user.id);
+    // ?format=csv is a download, not an API shape — the browser gets a file.
+    if (new URL(req.url).searchParams.get("format") === "csv") {
+      const prices = await reportPrices(db, items.map((i) => i.ticker));
+      return new Response(`${formatWatchlistCsv(items, prices)}\n`, {
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="${WATCHLIST_CSV_FILENAME}"`,
+          "cache-control": "no-store",
+        },
+      });
+    }
+    return json({ items });
   }
 
   let body: Record<string, unknown> = {};
@@ -125,6 +196,22 @@ export async function handleWatchlistRoute(
   const ticker = typeof body.ticker === "string" ? body.ticker : "";
 
   if (req.method === "POST") {
+    // Import: the whole file is sent as text and parsed here, so the server
+    // decides what a valid ticker is for both the single-add and bulk paths.
+    if (typeof body.csv === "string") {
+      const { entries, invalid } = parseWatchlistCsv(body.csv);
+      if (entries.length === 0) {
+        return json({ error: "No valid tickers in that file.", invalid }, 400);
+      }
+      const result = await addManyToWatchlist(db, user.id, entries);
+      return json({
+        ok: true,
+        ...result,
+        invalid: [...invalid, ...result.invalid],
+        items: await listWatchlist(db, user.id),
+      });
+    }
+
     const note = typeof body.note === "string" ? body.note : undefined;
     const result = await addToWatchlist(db, user.id, ticker, note);
     if (!result.ok) return json({ error: result.error }, 400);
