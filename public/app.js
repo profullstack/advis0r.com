@@ -225,6 +225,7 @@ async function runWatchlist() {
     const aiCount = cs.filter((c) => c.provider && c.provider !== "offline").length;
     $("#wl-summary").textContent = `topic: ${data.topic || "(whole index)"} · ${cs.length} candidates · ${aiCount}/${cs.length} AI-sharpened · ${data.horizonQuarters}Q horizon`;
     $("#wl-sharpen").style.display = cs.length ? "" : "none";
+    $("#wl-export").style.display = cs.length ? "" : "none";
     list.innerHTML = cs.length ? cs.map(candidateCard).join("") : `<div class="empty">No candidates. Index some transcripts first (CLI: <code>transcripts sync "&lt;topic&gt;"</code>).</div>`;
   } catch (e) {
     list.innerHTML = `<div class="empty">Failed to load watchlist (${esc(e.message)}).</div>`;
@@ -266,6 +267,56 @@ async function sharpenAll() {
   await runWatchlist(); // re-render with cached AI scores + re-rank
 }
 
+/* ---- Export Discover results to a watchlist ----
+   One click turns the current ranked results into watchlist entries. Signed-in
+   visitors get them saved straight to their account through the same bulk CSV
+   endpoint the Import button uses, so both paths agree on validation, dedupe
+   and the per-user cap. Signed-out visitors get the CSV as a download instead —
+   the same file the Import button accepts, so nothing they export is stranded. */
+
+/** Escape one CSV field (mirror of csvField in src/auth/watchlist-csv.ts). */
+const csvCell = (v) => (/["\n\r,]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+
+function discoverCsv() {
+  const topic = $("#wl-topic").value.trim();
+  const rows = ["Symbol,Note,Price"];
+  for (const c of lastWatchlist) {
+    // The note records where the pick came from — rank and risk class survive
+    // the trip onto the watchlist, where only ticker + note are shown.
+    const note = `Discover${topic ? ` “${topic}”` : ""} · #${c.rank} · ${c.classification}`;
+    rows.push([c.ticker, csvCell(note), c.lastPrice != null ? Number(c.lastPrice).toFixed(2) : ""].join(","));
+  }
+  return rows.join("\n") + "\n";
+}
+
+async function exportDiscover() {
+  if (!lastWatchlist.length) return;
+  const btn = $("#wl-export");
+  btn.disabled = true;
+  try {
+    if (!authState.user) {
+      const blob = new Blob([discoverCsv()], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "discover-watchlist.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      $("#wl-summary").textContent =
+        "Downloaded discover-watchlist.csv — create a free account to keep a watchlist online, then Import this file.";
+      return;
+    }
+    const res = await wlApi("POST", { csv: discoverCsv() });
+    // Re-renders the Watchlist tab and flips these cards' buttons to ✓ Watching.
+    renderMyWatchlist(res.items || []);
+    $("#wl-summary").textContent = `${importSummary(res)} See the Watchlist tab.`;
+  } catch (e) {
+    if (e.authRequired) { openAuth("login"); return; }
+    $("#wl-summary").textContent = `Export failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function loadTopics() {
   try {
     const { topics } = await api("/api/topics");
@@ -275,6 +326,7 @@ async function loadTopics() {
 
 $("#wl-run").addEventListener("click", runWatchlist);
 $("#wl-sharpen").addEventListener("click", sharpenAll);
+$("#wl-export").addEventListener("click", exportDiscover);
 $("#wl-topic").addEventListener("keydown", (e) => e.key === "Enter" && runWatchlist());
 // Picking a suggestion from the datalist fires an 'input' change → run it.
 $("#wl-topic").addEventListener("change", () => runWatchlist());
@@ -331,8 +383,10 @@ async function boot() {
   loadTopics();
   const disc = "This output is generated from public information and automated analysis. It is a research aid, not a guarantee, personalized recommendation, or substitute for professional financial advice. Small-cap and low-priced stocks may be highly volatile, illiquid, subject to dilution, manipulation, delisting, and total loss.";
   $("#disclaimer").textContent = disc;
-  const start = (location.hash || "#watchlist").slice(1);
-  showView(["watchlist", "search", "signals", "about"].includes(start) ? start : "watchlist");
+  // "discover" was missing from this list after the view rename, so a link to
+  // /#discover landed on the per-user Watchlist tab instead.
+  const start = (location.hash || "#discover").slice(1);
+  showView(["discover", "watchlist", "search", "signals", "about"].includes(start) ? start : "discover");
   runWatchlist();
   // Deep link from a digest email: /?ticker=NVDA opens that stock's detail.
   const params = new URL(location.href).searchParams;
