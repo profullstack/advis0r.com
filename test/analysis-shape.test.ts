@@ -12,6 +12,7 @@ import {
   toStrictJsonSchema,
 } from "../src/analysis/schema.ts";
 import { supportsEffort } from "../src/providers/anthropic.ts";
+import { supportsReasoning } from "../src/providers/openai.ts";
 
 const shape = (o: Record<string, unknown>) => coerceAnalysisShape(o) as Record<string, unknown>;
 
@@ -94,5 +95,17 @@ describe("effort support gating", () => {
 
   test("withheld from Haiku, which rejects the request outright", () => {
     expect(supportsEffort("claude-haiku-4-5")).toBe(false);
+  });
+
+  test("sent to OpenAI reasoning models, including suffixed ids", () => {
+    expect(supportsReasoning("gpt-5.6-luna")).toBe(true);
+    expect(supportsReasoning("gpt-5-mini")).toBe(true);
+    expect(supportsReasoning("o3")).toBe(true);
+  });
+
+  test("withheld from pre-reasoning OpenAI chat models", () => {
+    expect(supportsReasoning("gpt-4o")).toBe(false);
+    expect(supportsReasoning("gpt-4.1")).toBe(false);
+    expect(supportsReasoning("gpt-3.5-turbo")).toBe(false);
   });
 });
