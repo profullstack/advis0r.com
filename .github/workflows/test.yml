@@ -1,0 +1,45 @@
+# Typecheck + test gate.
+#
+# The repository had no workflow that ran `bun test`, so until now none of the
+# suite gated a merge — a red test only showed up if someone ran it locally.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: typecheck + bun test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # --frozen-lockfile so a lockfile that drifted from package.json fails
+      # here rather than silently resolving to different versions than anyone
+      # tested against.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # No external credentials are set. Every suite is expected to run without
+      # them: the backend tests use a temporary local libSQL file, and the
+      # dashboard test answers its own requests from fixtures. A test that
+      # silently needs a key would fail here, which is the point.
+      - name: Test
+        run: bun test
+        env:
+          MAIL_DISABLED: "1"
+          DIGEST_SCHEDULER: "0"
