@@ -13,6 +13,7 @@
  *   GET /api/signals?ticker=..           -> extracted signals for a ticker
  *   GET /api/tickers                     -> tickers present in the index
  *   GET /api/discover?topic=..&provider= -> ranked watchlist (offline by default)
+ *   GET /crypto/**                       -> crypto market data (see src/crypto/routes.ts)
  *   GET /*                               -> static assets / SPA shell
  */
 import { join, normalize } from "node:path";
@@ -36,6 +37,7 @@ import { startDigestScheduler } from "./digest/run.ts";
 import { handleReportRoute } from "./reports/routes.ts";
 import { loadReport, normalizeSymbol, saveReport } from "./reports/store.ts";
 import { handleLookupRoute } from "./symbols/routes.ts";
+import { handleCryptoRoute } from "./crypto/routes.ts";
 import { resolveOne } from "./symbols/lookup.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
@@ -430,6 +432,7 @@ const server = Bun.serve({
             "GET /api/lookup?q=&limit=": "find a ticker by company name (e.g. q=rivian -> RIVN)",
             "GET /api/digest": "your watchlist email frequency (requires sign-in)",
             "POST /api/digest": "set frequency: daily | weekly | off",
+            "GET /crypto": "crypto market data index — every crypto route is namespaced under /crypto/**",
           },
           disclaimer: DISCLAIMER,
         });
@@ -804,6 +807,14 @@ const server = Bun.serve({
       // digest email links to.
       const digestResponse = await handleDigestRoute(req, p, { db, appUrl: config.appUrl });
       if (digestResponse) return digestResponse;
+
+      // Crypto (/crypto/** and /api/crypto/**). Ahead of the report routes and
+      // the SPA fallback so /crypto/BTC-USD is never answered with index.html.
+      const cryptoResponse = await handleCryptoRoute(req, p, {
+        client: registry.crypto,
+        indicators: INDICATOR_CONFIG,
+      });
+      if (cryptoResponse) return cryptoResponse;
 
       // Stored report pages (/ticker/<SYMBOL>, /reports) and the regenerate
       // endpoint. Must come before the SPA fallback, which would otherwise
