@@ -12,7 +12,7 @@
  * The client is faked throughout — these tests never touch the network.
  */
 import { describe, expect, test } from "bun:test";
-import { handleCryptoRoute, resetAssetsCache } from "../src/crypto/routes.ts";
+import { cryptoDeepLinkRedirect, handleCryptoRoute, resetAssetsCache } from "../src/crypto/routes.ts";
 import {
   DEFAULT_QUOTE,
   SUPPORTED_PAIRS,
@@ -368,6 +368,33 @@ describe("errors", () => {
     expect(res!.status).toBe(502);
     const b = await body(res);
     expect(b.detail).toContain("alpaca is down");
+  });
+});
+
+describe("the old in-app deep link", () => {
+  const redirect = (path: string, query = "") =>
+    cryptoDeepLinkRedirect(path, new URL(`https://advis0r.com${path}${query}`), "https://advis0r.com");
+
+  test("/?pair=SOL-USD lands on the pair's page", async () => {
+    // This URL opened a modal with no analysis and nothing to share. It is a
+    // permanent redirect now, so links already sent to people still work.
+    const res = redirect("/", "?pair=SOL-USD");
+    expect(res!.status).toBe(301);
+    expect(res!.headers.get("location")).toBe("https://advis0r.com/crypto/SOL-USD");
+  });
+
+  test("it accepts the same spellings every other route does", async () => {
+    for (const q of ["?pair=btc", "?pair=BTC-USD", "?pair=BTC/USD", "?pair=btcusd"]) {
+      expect(redirect("/", q)!.headers.get("location")).toBe("https://advis0r.com/crypto/BTC-USD");
+    }
+  });
+
+  test("it leaves everything else alone", async () => {
+    // An unknown pair must fall through to the app rather than 301 into a 404.
+    expect(redirect("/", "?pair=nonsense")).toBeNull();
+    expect(redirect("/", "?ticker=NVDA")).toBeNull();
+    expect(redirect("/")).toBeNull();
+    expect(redirect("/crypto", "?pair=BTC-USD")).toBeNull();
   });
 });
 

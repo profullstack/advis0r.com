@@ -4,10 +4,12 @@
  *
  * This is the project's first frontend test, and it exists because the crypto
  * tab reuses the stock side's machinery rather than copying it: `attachLookup`
- * now serves both the ticker boxes and the crypto picker, and the crypto modal
- * mounts the same charts. That reuse is the right call, but it means a change
- * made for one surface can silently break the other — so the equity lookup is
- * asserted here too, not just the crypto path.
+ * now serves both the ticker boxes and the crypto picker. That reuse is the
+ * right call, but it means a change made for one surface can silently break the
+ * other — so the equity lookup is asserted here too, not just the crypto path.
+ *
+ * There is no crypto modal any more: a pair is a page, so the grid's job is to
+ * link to it correctly.
  *
  * Hermetic on purpose. Every request is answered from the fixtures below, so
  * the suite never needs a server, a database, or Alpaca credentials, and it
@@ -254,48 +256,6 @@ describe("crypto tab", () => {
   });
 });
 
-/**
- * The modal is no longer how you reach a pair — cards link to pages now. It
- * survives as the in-app interactive chart, reached from the page via
- * "Open the interactive chart" (/?pair=BTC-USD), so it is still worth testing.
- */
-describe("crypto interactive view", () => {
-  beforeEach(async () => {
-    // Reached the way a person reaches it: the link on the rendered page.
-    await loadPage("?pair=BTC-USD");
-    await sleep(350);
-  });
-
-  test("opens and finishes loading", () => {
-    expect($("#detail").classList.contains("hidden")).toBe(false);
-    expect(text("#detail-panel")).not.toContain("Loading BTC/USD");
-    expect(text("#detail-panel")).toContain("BTC/USD");
-    expect(text("#detail-panel")).toContain("Bitcoin");
-  });
-
-  test("shows market, technicals and the order book", () => {
-    const panel = text("#detail-panel");
-    expect(panel).toContain("Spread");
-    expect(panel).toContain("RSI(14)");
-    expect(panel).toContain("Order book");
-    // depth=8 is requested and enforced in the render, so a 12-deep book trims.
-    expect($$("#detail-panel .ob-row.bid").length).toBe(8);
-    expect($$("#detail-panel .ob-row.ask").length).toBe(8);
-  });
-
-  test("carries the venue-volume caveat and the crypto disclaimer", () => {
-    const panel = text("#detail-panel");
-    // Publishing a liquidity score without this note invites it to be read as
-    // illiquidity, when it only reflects Alpaca's own venue.
-    expect(panel).toContain("US crypto venue alone");
-    expect(panel).toContain("circuit breakers");
-  });
-
-  test("omits the SEC block, which cannot exist for a digital asset", () => {
-    expect(text("#detail-panel")).not.toContain("Fundamentals (SEC)");
-  });
-});
-
 describe("crypto lookup", () => {
   test("typing a name offers pairs", async () => {
     type($("#cx-find"), "bitcoin");
@@ -360,27 +320,3 @@ describe("equity surfaces still work after the shared-lookup refactor", () => {
   });
 });
 
-describe("deep links", () => {
-  test("?pair=BTC-USD opens that pair on the crypto tab", async () => {
-    win?.close();
-    const prev = respond;
-    dom = new JSDOM(read("index.html"), {
-      url: "http://localhost/?pair=BTC-USD",
-      runScripts: "outside-only",
-      pretendToBeVisual: true,
-    });
-    win = dom.window as any;
-    win.LightweightCharts = null;
-    win.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-    win.alert = () => {};
-    win.fetch = async (input: any) => ({
-      ok: true, status: 200,
-      json: async () => prev(String(input?.url ?? input)),
-      text: async () => JSON.stringify(prev(String(input?.url ?? input))),
-    });
-    win.eval([read("app.js"), read("auth.js")].join("\n;\n"));
-    await sleep(400);
-    expect($('.view[data-view="crypto"]').classList.contains("active")).toBe(true);
-    expect(text("#detail-panel")).toContain("BTC/USD");
-  });
-});

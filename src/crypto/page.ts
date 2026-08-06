@@ -15,7 +15,8 @@ import { CRYPTO_DISCLAIMER } from "../compliance.ts";
 import { escapeHtml, escapeXml } from "../util/html.ts";
 import { absoluteTime, num, score, shell, sparkline } from "../reports/page.ts";
 import type { CryptoAnalysis } from "./analysis.ts";
-import type { CryptoSnapshot } from "./client.ts";
+import type { CryptoOrderbook, CryptoSnapshot } from "./client.ts";
+import type { CryptoPerformance } from "./performance.ts";
 import type { CryptoPair } from "./pairs.ts";
 import type { MarketBar, TechnicalIndicatorSet, TechnicalScore } from "../types.ts";
 
@@ -48,6 +49,9 @@ export interface CryptoPageData {
   technical?: TechnicalIndicatorSet;
   technicalScore?: TechnicalScore;
   analysis: CryptoAnalysis | null;
+  performance?: CryptoPerformance;
+  /** Top of book, when the upstream returned one. */
+  orderbook?: CryptoOrderbook;
   caveats: readonly string[];
   fetchedAt: string;
   /** Set when market data could not be reached, so the page can say so. */
@@ -57,6 +61,52 @@ export interface CryptoPageData {
 export interface CryptoPageOptions {
   appUrl: string;
   now?: Date;
+}
+
+const signed = (n: number, dp = 2) => `${n >= 0 ? "+" : ""}${n.toFixed(dp)}%`;
+
+/** Multi-period performance — what the pair has been doing, not just its spread. */
+function performanceSection(p: CryptoPerformance | undefined, quote: string): string {
+  if (!p) return "";
+  const cells = p.changes
+    .map((c) =>
+      kv(
+        c.label,
+        c.percent == null ? "—" : signed(c.percent),
+        c.percent == null ? "" : c.percent >= 0 ? "pos" : "neg",
+      ),
+    )
+    .join("");
+  const thin = p.changes.some((c) => c.percent == null);
+  return `<section class="rp-section">
+    <h2>Performance</h2>
+    <dl class="rp-grid">${cells}</dl>
+    <dl class="rp-grid">
+      ${kv("52-week high", `${cryptoMoney(p.high52)}${p.high52At ? ` <span class="rp-when">${e(p.high52At)}</span>` : ""}`)}
+      ${kv("52-week low", `${cryptoMoney(p.low52)}${p.low52At ? ` <span class="rp-when">${e(p.low52At)}</span>` : ""}`)}
+      ${kv(`Session volume (${e(quote)})`, p.volumeQuote == null ? "—" : cryptoMoney(p.volumeQuote))}
+      ${kv("Daily bars", String(p.barCount))}
+    </dl>
+    ${thin ? `<p class="rp-note">A period showing “—” has less history than it needs. Measuring it from the oldest bar available would report a change over a window that does not exist.</p>` : ""}
+    <p class="rp-note">Market capitalisation, circulating supply and all-time high are not shown: Alpaca's market-data API does not carry them, and deriving them would mean inventing a supply figure or mixing in a second vendor.</p>
+  </section>`;
+}
+
+/** Top of book, the one thing the old in-app modal had that the page did not. */
+function orderbookSection(ob: CryptoOrderbook | undefined): string {
+  if (!ob || (!ob.bids?.length && !ob.asks?.length)) return "";
+  const side = (levels: Array<{ price: number; size: number }>, cls: string) =>
+    levels.slice(0, 8)
+      .map((l) => `<div class="ob-row ${cls}"><span class="ob-p">${cryptoMoney(l.price)}</span><span class="ob-s">${num(l.size, 4)}</span></div>`)
+      .join("");
+  return `<section class="rp-section">
+    <h2>Order book</h2>
+    <div class="obgrid">
+      <div><div class="ob-head">Bids</div>${side(ob.bids ?? [], "bid")}</div>
+      <div><div class="ob-head">Asks</div>${side(ob.asks ?? [], "ask")}</div>
+    </div>
+    <p class="rp-note">Top of book as of ${e(String(ob.timestamp ?? "").slice(11, 19))} UTC. A book moves continuously — this one is as of page load, not live.</p>
+  </section>`;
 }
 
 function analysisSection(a: CryptoAnalysis | null): string {
@@ -122,7 +172,7 @@ export function renderCryptoPage(data: CryptoPageData, opts: CryptoPageOptions):
     Fetched <strong>${e(absoluteTime(data.fetchedAt))}</strong>.
     Rendered live on request — crypto has no market close, so there is no daily
     snapshot to store.
-    <a class="rp-open" href="/?pair=${e(pair.slug)}">Open the interactive chart ↗</a>
+    <a class="rp-open" href="/#crypto">Back to the crypto grid ↗</a>
   </p>
 
   ${data.marketError ? `<p class="rp-note">Market data was unavailable for part of this page (${e(data.marketError)}).</p>` : ""}
@@ -144,7 +194,11 @@ export function renderCryptoPage(data: CryptoPageData, opts: CryptoPageOptions):
     </dl>
   </section>
 
+  ${performanceSection(data.performance, pair.quote)}
+
   ${analysisSection(analysis)}
+
+  ${orderbookSection(data.orderbook)}
 
   <section class="rp-section">
     <h2>Technical</h2>

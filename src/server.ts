@@ -37,7 +37,7 @@ import { startDigestScheduler } from "./digest/run.ts";
 import { handleReportRoute } from "./reports/routes.ts";
 import { loadReport, normalizeSymbol, saveReport } from "./reports/store.ts";
 import { handleLookupRoute } from "./symbols/routes.ts";
-import { handleCryptoRoute } from "./crypto/routes.ts";
+import { cryptoDeepLinkRedirect, handleCryptoRoute } from "./crypto/routes.ts";
 import { cryptoSitemapEntries } from "./crypto/page.ts";
 import { SUPPORTED_PAIRS } from "./crypto/pairs.ts";
 import { resolveOne } from "./symbols/lookup.ts";
@@ -414,6 +414,9 @@ const server = Bun.serve({
 
     try {
       if (p === "/health") return json({ ok: true });
+
+      const pairRedirect = cryptoDeepLinkRedirect(p, url, config.appUrl);
+      if (pairRedirect) return pairRedirect;
 
       if (p === "/api" || p === "/api/") {
         return json({

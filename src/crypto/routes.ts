@@ -24,6 +24,7 @@ import { calculateIndicators, scoreTechnicalSetup } from "../technical/indicator
 import type { BarTimeframe, IndicatorConfig, MarketBar } from "../types.ts";
 import type { AlpacaCryptoClient } from "./client.ts";
 import { analyzeCrypto } from "./analysis.ts";
+import { computePerformance } from "./performance.ts";
 import { renderCryptoIndexPage, renderCryptoPage, renderMissingCryptoPage } from "./page.ts";
 import { SUPPORTED_PAIRS, getPair, lookupPairs, normalizePair, normalizePairs } from "./pairs.ts";
 
@@ -148,6 +149,27 @@ export async function handleCryptoRoute(
  * Tolerant of a trailing slash. Order matters: "/api/crypto" must be tested
  * first, or it would be mistaken for a pair named "crypto" under "/api".
  */
+/**
+ * `/?pair=BTC-USD` used to open an in-app modal — a second, weaker view of the
+ * same pair, with no analysis and a URL nobody could share. There is one
+ * surface now, so those links redirect to it.
+ *
+ * Lives here rather than inline in the server so it can be tested, and so the
+ * pair grammar stays in one place. Returns null when the path is not the app
+ * root or the parameter is not a pair we serve.
+ */
+export function cryptoDeepLinkRedirect(
+  path: string,
+  url: URL,
+  appUrl: string,
+): Response | null {
+  if (path !== "/" && path !== "") return null;
+  if (!url.searchParams.has("pair")) return null;
+  const symbol = normalizePair(url.searchParams.get("pair"));
+  if (!symbol) return null;
+  return Response.redirect(`${appUrl.replace(/\/$/, "")}/crypto/${getPair(symbol)!.slug}`, 301);
+}
+
 /**
  * Does this route render HTML? Only the directory and a pair, and only under
  * the bare prefix — every named endpoint answers JSON under either prefix.
@@ -561,9 +583,12 @@ async function pairPage(raw: string, deps: CryptoRouteDeps): Promise<Response> {
     return Response.redirect(`${deps.appUrl.replace(/\/$/, "")}/crypto/${pair.slug}`, 301);
   }
 
+  // 400 days covers the technical windows; a year of history also backs the
+  // 1-year performance figure.
   const start = new Date(Date.now() - TECHNICAL_LOOKBACK_DAYS * 86_400_000).toISOString();
   let snapshot: Awaited<ReturnType<typeof deps.client.getSnapshots>>[number] | undefined;
   let bars: MarketBar[] = [];
+  let orderbook: Awaited<ReturnType<typeof deps.client.getOrderbooks>>[number] | undefined;
   let marketError: string | undefined;
   try {
     const [snaps, rows] = await Promise.all([
@@ -575,6 +600,13 @@ async function pairPage(raw: string, deps: CryptoRouteDeps): Promise<Response> {
   } catch (err) {
     // Degrade to whatever we have rather than 502 the whole page.
     marketError = String(err).slice(0, 200);
+  }
+  // The book is a nice-to-have: it must never take the page down with it, so
+  // it is fetched separately from the data the page is actually about.
+  try {
+    [orderbook] = await deps.client.getOrderbooks([symbol]);
+  } catch {
+    /* rendered without a book */
   }
 
   const technical = bars.length >= 2 ? calculateIndicators(bars, deps.indicators) : undefined;
@@ -589,6 +621,8 @@ async function pairPage(raw: string, deps: CryptoRouteDeps): Promise<Response> {
         technical,
         technicalScore,
         analysis: analyzeCrypto(pair.symbol, pair.name, technical, technicalScore),
+        performance: computePerformance(bars),
+        orderbook,
         caveats: SCORE_CAVEATS,
         fetchedAt: new Date().toISOString(),
         marketError,
