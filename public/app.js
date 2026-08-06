@@ -16,6 +16,9 @@ function showView(name) {
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
   location.hash = name;
+  // Crypto prices are only fetched once the tab is actually opened — loading
+  // them on boot would spend upstream calls for every visitor who never looks.
+  if (name === "crypto") loadCryptoGrid();
 }
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -57,7 +60,19 @@ async function loadHealthAndStats() {
 
 const LOOKUP_DEBOUNCE_MS = 180;
 
-function attachLookup(input, onSelect) {
+/** Equity symbols resolve without a round trip; crypto pairs override this. */
+const EQUITY_SYMBOL_RE = /^[A-Za-z]{1,5}(\.[A-Za-z]{1,2})?$/;
+
+/**
+ * `opts` lets a second search surface (crypto) reuse this widget rather than
+ * grow a parallel copy: only the endpoint, the right-hand meta column and the
+ * "already a symbol" shortcut differ between them.
+ */
+function attachLookup(input, onSelect, opts = {}) {
+  const url = opts.url || ((q) => `/api/lookup?q=${encodeURIComponent(q)}&limit=8`);
+  const meta = opts.meta || ((m) => `${esc(m.exchange || "")}${m.hasReport ? ' <span class="lookup-rep">report</span>' : ""}`);
+  const isSymbol = opts.isSymbol || ((q) => EQUITY_SYMBOL_RE.test(q));
+
   const box = input.closest(".lookup");
   const results = box?.querySelector(".lookup-results");
   if (!box || !results) return;
@@ -84,7 +99,7 @@ function attachLookup(input, onSelect) {
            role="option" aria-selected="${i === active}" data-i="${i}">
         <span class="lookup-sym">${esc(m.symbol)}</span>
         <span class="lookup-name">${esc(m.name)}</span>
-        <span class="lookup-meta">${esc(m.exchange || "")}${m.hasReport ? ' <span class="lookup-rep">report</span>' : ""}</span>
+        <span class="lookup-meta">${meta(m)}</span>
       </button>`)
       .join("");
     results.hidden = false;
@@ -102,7 +117,7 @@ function attachLookup(input, onSelect) {
   const search = async (q) => {
     const mine = ++seq;
     try {
-      const r = await fetch(`/api/lookup?q=${encodeURIComponent(q)}&limit=8`, { credentials: "same-origin" });
+      const r = await fetch(url(q), { credentials: "same-origin" });
       const data = await r.json();
       if (mine !== seq) return; // a newer keystroke already won
       items = data.matches || [];
@@ -140,9 +155,9 @@ function attachLookup(input, onSelect) {
   return async function resolve(raw) {
     const q = (raw ?? input.value).trim();
     if (!q) return null;
-    if (/^[A-Za-z]{1,5}(\.[A-Za-z]{1,2})?$/.test(q)) return { symbol: q.toUpperCase() };
+    if (isSymbol(q)) return { symbol: q.toUpperCase() };
     try {
-      const r = await fetch(`/api/lookup?q=${encodeURIComponent(q)}&limit=8`, { credentials: "same-origin" });
+      const r = await fetch(url(q), { credentials: "same-origin" });
       const { matches = [] } = await r.json();
       if (matches.length === 1) return matches[0];
       // Ambiguous: show the options rather than pick one. Putting the wrong
@@ -386,7 +401,7 @@ async function boot() {
   // "discover" was missing from this list after the view rename, so a link to
   // /#discover landed on the per-user Watchlist tab instead.
   const start = (location.hash || "#discover").slice(1);
-  showView(["discover", "watchlist", "search", "signals", "about"].includes(start) ? start : "discover");
+  showView(["discover", "watchlist", "search", "signals", "crypto", "about"].includes(start) ? start : "discover");
   runWatchlist();
   // Deep link from a digest email: /?ticker=NVDA opens that stock's detail.
   const params = new URL(location.href).searchParams;
@@ -396,6 +411,12 @@ async function boot() {
   }
   // Deep link from a "no report for that symbol" page: /?lookup=rivian lands on
   // the watchlist with the picker already showing what they meant.
+  // Deep link to one pair: /?pair=BTC-USD opens it on the Crypto tab.
+  const pair = params.get("pair");
+  if (pair && /^[A-Za-z0-9]{2,6}-[A-Za-z]{3,4}$/.test(pair)) {
+    showView("crypto");
+    openCryptoPair(pair.toUpperCase().replace("-", "/"));
+  }
   const lookup = params.get("lookup");
   if (lookup) {
     showView("watchlist");
@@ -1251,6 +1272,8 @@ document.addEventListener("click", (e) => {
   if (w) { e.preventDefault(); toggleWatch(w.dataset.watch); return; }
   const d = e.target.closest("[data-detail]");
   if (d) { e.preventDefault(); openTicker(d.dataset.detail); return; }
+  const cx = e.target.closest("[data-crypto]");
+  if (cx) { e.preventDefault(); openCryptoPair(cx.dataset.crypto); return; }
 });
 
 async function toggleWatchAdd(ticker) {
@@ -1457,3 +1480,232 @@ document.addEventListener("click", (e) => {
   const open = e.target.closest("[data-auth-mode-open]");
   if (open) { e.preventDefault(); openAuth(open.dataset.authModeOpen); }
 });
+
+/* ---- Crypto ---------------------------------------------------------------
+   Backed entirely by /crypto/** (see src/crypto/routes.ts), which rides the
+   same Alpaca account as the stock side. Deliberately reuses the existing
+   chart, modal and lookup machinery rather than growing a parallel copy — the
+   only genuinely different things here are the symbol grammar (BASE/QUOTE),
+   the fact that there are no issuer fundamentals to show, and the venue-volume
+   caveat that has to travel with the technical score. */
+
+/** The grid's default set: the majors, all USD-quoted. Inside MAX_BASKET (20). */
+const CRYPTO_GRID_PAIRS = [
+  "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD", "ADA/USD",
+  "LINK/USD", "AVAX/USD", "LTC/USD", "DOT/USD", "BCH/USD", "MATIC/USD",
+];
+
+const CRYPTO_REFRESH_MS = 30_000;
+let cryptoTimer = null;
+let cryptoLoading = false;
+
+/** URL-safe pair form: BTC/USD -> BTC-USD. */
+const pairSlug = (p) => String(p).replace("/", "-");
+
+/**
+ * Crypto spans $0.00001 (SHIB) to $60k (BTC), so a fixed 2dp is useless at one
+ * end and noise at the other. Scale the precision to the magnitude.
+ */
+function fmtPrice(n) {
+  if (n == null || !isFinite(n)) return "—";
+  const a = Math.abs(n);
+  const dp = a >= 1000 ? 2 : a >= 1 ? 4 : a >= 0.01 ? 5 : 8;
+  return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+
+/** Alpaca bar -> the {t,o,h,l,c,v} shape the chart code already speaks. */
+const toChartBars = (rows) =>
+  (rows || []).map((b) => ({
+    t: String(b.timestamp).slice(0, 10),
+    o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume,
+  }));
+
+function cryptoCard(s) {
+  const chg = s.change;
+  const dir = chg == null ? "" : chg.percent >= 0 ? "positive" : "negative";
+  const price = s.latestTrade?.price ?? s.dailyBar?.close;
+  const q = s.latestQuote;
+  const spreadBps = q && q.askPrice && q.bidPrice
+    ? ((q.askPrice - q.bidPrice) / ((q.askPrice + q.bidPrice) / 2)) * 10000
+    : null;
+  return `<button class="cxcard ${dir}" data-crypto="${esc(s.symbol)}" type="button">
+    <div class="cx-top">
+      <span class="cx-sym">${esc(s.base)}</span>
+      <span class="cx-quote">/${esc(s.quote)}</span>
+      <span class="cx-name">${esc(s.name || "")}</span>
+    </div>
+    <div class="cx-price">${fmtPrice(price)}</div>
+    <div class="cx-sub">
+      ${chg == null ? '<span class="cx-dim">—</span>'
+        : `<span class="sig-dir ${dir}">${chg.percent >= 0 ? "+" : ""}${chg.percent.toFixed(2)}%</span>`}
+      ${spreadBps != null ? `<span class="cx-spread" title="Bid/ask spread">${spreadBps.toFixed(1)} bps</span>` : ""}
+    </div>
+  </button>`;
+}
+
+async function loadCryptoGrid() {
+  // Guard against a slow response overlapping the 30s auto-refresh tick.
+  if (cryptoLoading) return;
+  cryptoLoading = true;
+  const grid = $("#cx-grid");
+  const summary = $("#cx-summary");
+  if (!grid) { cryptoLoading = false; return; }
+  if (!grid.dataset.loaded) grid.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const d = await api(`/crypto/snapshot?symbols=${encodeURIComponent(CRYPTO_GRID_PAIRS.join(","))}`);
+    const rows = (d.snapshots || []).filter((s) => s.latestTrade || s.dailyBar);
+    grid.innerHTML = rows.length
+      ? rows.map(cryptoCard).join("")
+      : `<p class="empty">No crypto prices available right now.</p>`;
+    grid.dataset.loaded = "1";
+    if (summary) {
+      summary.textContent = `${rows.length} pairs · Alpaca US crypto venue · updated ${new Date().toLocaleTimeString()}`;
+    }
+  } catch (e) {
+    // Never blank an already-painted grid on a refresh failure — a transient
+    // blip should not look like the market vanished.
+    if (!grid.dataset.loaded) grid.innerHTML = `<p class="empty">Could not load crypto prices (${esc(e.message)}).</p>`;
+    if (summary) summary.textContent = `Refresh failed (${e.message}) — showing the last good prices.`;
+  } finally {
+    cryptoLoading = false;
+  }
+}
+
+/** Auto-refresh only while the tab is actually being looked at. */
+function setCryptoAuto(on) {
+  clearInterval(cryptoTimer);
+  cryptoTimer = null;
+  if (!on) return;
+  cryptoTimer = setInterval(() => {
+    const visible = document.visibilityState === "visible" &&
+      document.querySelector('.view[data-view="crypto"]')?.classList.contains("active");
+    if (visible) loadCryptoGrid();
+  }, CRYPTO_REFRESH_MS);
+}
+
+function renderCryptoDetail(d, bars, book) {
+  const t = d.technical || {};
+  const s = d.snapshot || {};
+  const chg = s.change;
+  const q = s.latestQuote;
+  const price = s.latestTrade?.price ?? s.dailyBar?.close;
+  const spread = q ? q.askPrice - q.bidPrice : null;
+  const mid = q ? (q.askPrice + q.bidPrice) / 2 : null;
+
+  const depthRow = (lvl, side) =>
+    `<div class="ob-row ${side}"><span class="ob-p">${fmtPrice(lvl.price)}</span><span class="ob-s">${fmtNum(lvl.size, 4)}</span></div>`;
+  const bookHtml = book && (book.bids?.length || book.asks?.length)
+    ? `<div class="dl-section"><h3>Order book</h3>
+         <div class="obgrid">
+           <div><div class="ob-head">Bids</div>${(book.bids || []).slice(0, 8).map((l) => depthRow(l, "bid")).join("")}</div>
+           <div><div class="ob-head">Asks</div>${(book.asks || []).slice(0, 8).map((l) => depthRow(l, "ask")).join("")}</div>
+         </div>
+         <p class="src-note">Top of book at ${esc(String(book.timestamp || "").slice(11, 19))} UTC. Never cached — a stale book is worse than none.</p>
+       </div>`
+    : "";
+
+  $("#detail-panel").innerHTML = `
+    <button class="close-x" data-close aria-label="Close">×</button>
+    <div class="dl-head">
+      <div>
+        <span class="tkr">${esc(d.symbol)}</span>
+        <span class="badge conservative">crypto</span>
+        <div class="cname">${esc(d.name || "")} · Alpaca US crypto venue</div>
+      </div>
+      <div class="dl-price">
+        <div class="p">${fmtPrice(price)}</div>
+        <div class="sub">${chg != null ? `<span class="${chg.percent >= 0 ? "sig-dir positive" : "sig-dir negative"}">${chg.percent >= 0 ? "+" : ""}${chg.percent.toFixed(2)}%</span> · ` : ""}live · 24/7</div>
+      </div>
+    </div>
+
+    <div class="chartbox">
+      <div id="lwc-price" class="lwchart"></div>
+      <div class="legend"><span><i style="background:#22c55e"></i>Candles</span><span><i style="background:#4c8dff"></i>SMA20</span><span><i style="background:#ffb454"></i>SMA50</span><span><i style="background:rgba(150,160,190,.8)"></i>Bollinger 20/2</span><span><i style="background:rgba(34,197,94,.55)"></i>Support</span><span><i style="background:rgba(248,113,113,.55)"></i>Resistance</span></div>
+    </div>
+    <div class="chartbox">
+      <div id="lwc-rsi" class="lwchart rsi"></div>
+      <div class="legend"><span><i style="background:#c48dff"></i>RSI(14)</span><span>oversold 30 · overbought 70</span></div>
+    </div>
+    <div class="chartbox">
+      <div id="lwc-macd" class="lwchart macd"></div>
+      <div class="legend"><span><i style="background:#4c8dff"></i>MACD</span><span><i style="background:#ffb454"></i>Signal</span><span>12 / 26 / 9</span></div>
+    </div>
+
+    <div class="dl-section"><h3>Market</h3>
+      <div class="grid2">
+        ${kv("Bid", q ? fmtPrice(q.bidPrice) : "—")}
+        ${kv("Ask", q ? fmtPrice(q.askPrice) : "—")}
+        ${kv("Mid", mid != null ? fmtPrice(mid) : "—")}
+        ${kv("Spread", spread != null && mid ? `${((spread / mid) * 10000).toFixed(1)} bps` : "—")}
+        ${kv("Day high", s.dailyBar ? fmtPrice(s.dailyBar.high) : "—")}
+        ${kv("Day low", s.dailyBar ? fmtPrice(s.dailyBar.low) : "—")}
+        ${kv("Prev close", s.prevDailyBar ? fmtPrice(s.prevDailyBar.close) : "—")}
+        ${kv("Venue volume", fmtNum(s.dailyBar?.volume, 4))}
+      </div>
+    </div>
+
+    <div class="dl-section"><h3>Technical</h3>
+      <div class="grid2">
+        ${kv("Trend", esc(t.trend || "—"), t.trend === "bullish" ? "pos" : t.trend === "bearish" ? "neg" : "")}
+        ${kv("Tech score", d.technicalScore?.score != null ? d.technicalScore.score + "/100" : "—")}
+        ${kv("RSI(14)", fmtNum(t.rsi14, 1))}
+        ${kv("SMA 20/50/200", `${fmtNum(t.sma?.[20])} / ${fmtNum(t.sma?.[50])} / ${fmtNum(t.sma?.[200])}`)}
+        ${kv("MACD", fmtNum(t.macd?.macd, 3))}
+        ${kv("ATR(14)", fmtNum(t.atr14, 3))}
+        ${kv("Mom 20/60/120d", `${fmtNum(t.momentum?.[20], 1)}% / ${fmtNum(t.momentum?.[60], 1)}% / ${fmtNum(t.momentum?.[120], 1)}%`)}
+        ${kv("From 52w high", t.distanceFrom52WeekHigh != null ? fmtNum(t.distanceFrom52WeekHigh, 1) + "%" : "—")}
+        ${kv("Golden cross", t.goldenCross ? "yes" : "no", t.goldenCross ? "pos" : "")}
+        ${kv("Volatility", esc(t.volatilityRegime || "—"))}
+      </div>
+    </div>
+
+    ${bookHtml}
+
+    ${(d.caveats || []).length
+      ? `<div class="dl-section"><h3>How to read this</h3>
+           <ul class="cx-caveats">${d.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>
+         </div>`
+      : ""}
+
+    <p class="src-note">Prices: Alpaca US crypto venue (real-time, 24/7). Indicators computed locally from daily bars. A digital asset has no issuer filings, so there is no SEC section here.</p>
+    <div class="disclaimer">${esc(d.disclaimer || "")}</div>`;
+
+  mountCharts(bars);
+}
+
+async function openCryptoPair(pair) {
+  if (!pair) return;
+  const modal = $("#detail");
+  modal.classList.remove("hidden");
+  $("#detail-panel").innerHTML = `<button class="close-x" data-close>×</button><div class="spinner"></div><p class="empty">Loading ${esc(pair)}…</p>`;
+  document.body.style.overflow = "hidden";
+  try {
+    // Report and bars are separate calls; the order book is allowed to fail on
+    // its own without taking the whole panel down with it.
+    const [d, barsRes, book] = await Promise.all([
+      api(`/crypto/report?symbol=${encodeURIComponent(pair)}`),
+      api(`/crypto/bars?symbol=${encodeURIComponent(pair)}&timeframe=1Day&limit=400`),
+      api(`/crypto/orderbook?symbol=${encodeURIComponent(pair)}&depth=8`).catch(() => null),
+    ]);
+    const rows = (barsRes.bars || {})[d.symbol] || [];
+    renderCryptoDetail(d, toChartBars(rows), book?.orderbooks?.[0] || null);
+  } catch (e) {
+    $("#detail-panel").innerHTML = `<button class="close-x" data-close>×</button><div class="empty">Failed to load ${esc(pair)} (${esc(e.message)}).</div>`;
+  }
+}
+
+/* Same widget as the ticker boxes, pointed at the crypto directory. A bare
+   "BTC" is NOT treated as already-a-symbol: it goes through lookup so the
+   dropdown can offer BTC/USD, BTC/USDT and BTC/USDC rather than guessing. */
+attachLookup(
+  document.getElementById("cx-find"),
+  (m) => openCryptoPair(m.symbol),
+  {
+    url: (q) => `/crypto/lookup?q=${encodeURIComponent(q)}&limit=8`,
+    meta: (m) => esc(m.quote || ""),
+    isSymbol: (q) => /^[A-Za-z0-9]{2,6}[/-][A-Za-z]{3,4}$/.test(q),
+  },
+);
+
+$("#cx-refresh")?.addEventListener("click", loadCryptoGrid);
+$("#cx-auto")?.addEventListener("change", (e) => setCryptoAuto(e.target.checked));

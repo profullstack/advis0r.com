@@ -136,6 +136,13 @@ signed when the keys are present and unsigned when they are not. That is why
 there is no Yahoo-style fallback on this path — the primary source degrades to
 itself rather than to a second vendor with different provenance.
 
+In the web dashboard this is the **Crypto** tab: a live grid of the majors
+(click any pair for candles, indicators and depth), a name-or-symbol picker, and
+an opt-in 30s auto-refresh that only ticks while that tab is actually on screen.
+Prices are fetched when the tab is first opened rather than on boot, so a
+visitor who never looks at it costs no upstream calls. Deep link one pair with
+`/?pair=BTC-USD`.
+
 Everything crypto is namespaced under **`/crypto/**`**. `/api/crypto/**` is an
 alias for the identical surface.
 
