@@ -122,7 +122,81 @@ retry) but require a funded key; without one, use `--provider offline`.
 bun run start                        # serve dashboard + API on :8080 (PORT)
 curl localhost:8080/api/stats
 curl "localhost:8080/api/discover?topic=AI%20infrastructure&limit=10"
+curl localhost:8080/crypto/BTC-USD   # crypto: see below
 ```
+
+## Crypto
+
+Crypto market data is served from **the same Alpaca account as equities** — the
+crypto feed carries no additional subscription and needs no additional vendor,
+so `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` are the only credentials involved.
+The feed also answers **unauthenticated**, so `/crypto/**` keeps working on a
+deployment where those keys are missing, expired, or rate-limited; requests are
+signed when the keys are present and unsigned when they are not. That is why
+there is no Yahoo-style fallback on this path — the primary source degrades to
+itself rather than to a second vendor with different provenance.
+
+Everything crypto is namespaced under **`/crypto/**`**. `/api/crypto/**` is an
+alias for the identical surface.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /crypto` | index of the crypto surface, including which auth mode is in effect |
+| `GET /crypto/assets` | the 49 supported pairs, each marked `live`/`idle` from a real probe |
+| `GET /crypto/lookup?q=bitcoin` | name or ticker → pair (`BTC/USD`) |
+| `GET /crypto/snapshot?symbols=BTC/USD,ETH/USD` | latest trade, quote, daily + previous bars, session change |
+| `GET /crypto/quote?symbol=BTC/USD` | latest trade/quote with spread and spread in basis points |
+| `GET /crypto/bars?symbol=&timeframe=&start=&end=&limit=` | historical OHLCV (`1Min`…`1Week`) |
+| `GET /crypto/orderbook?symbol=&depth=` | top of book, both sides |
+| `GET /crypto/technicals?symbol=&horizon=1\|2` | locally computed indicators + technical score |
+| `GET /crypto/report?symbol=` | snapshot + technicals + score in one call |
+| `GET /crypto/<PAIR>` | the same report by path, e.g. `/crypto/BTC-USD` |
+
+```bash
+curl "localhost:8080/crypto/lookup?q=bitcoin"
+curl "localhost:8080/crypto/quote?symbols=btc,ETH-USD,SOLUSD"
+curl "localhost:8080/crypto/BTC-USD"
+```
+
+### Symbols
+
+Alpaca writes pairs `BASE/QUOTE`, and a slash is hostile in a URL path, so every
+route accepts four spellings and answers with the canonical one:
+
+| You send | Resolves to |
+| --- | --- |
+| `BTC/USD` | `BTC/USD` (canonical) |
+| `BTC-USD` | `BTC/USD` (URL-safe — use this in paths) |
+| `BTC` | `BTC/USD` (bare asset defaults to the USD pair) |
+| `BTCUSD` | `BTC/USD` (longest quote wins, so `BTCUSDT` → `BTC/USDT`) |
+
+A pair Alpaca does not serve is rejected with a suggestion rather than forwarded
+upstream (`?symbol=bitcoin` → 400 with `didYouMean: BTC/USD`). In a multi-symbol
+basket the valid symbols still return, and the dropped ones are named in
+`rejected` — a basket that silently returned 2 of 3 would read as "no data for
+that pair" when the truth is "we did not accept that spelling".
+
+The pair directory in [`src/crypto/pairs.ts`](src/crypto/pairs.ts) is a probed
+seed, not a guess: every entry returned a real bar from Alpaca on 2026-08-06.
+`/crypto/assets` re-probes hourly and marks each pair `live` or `idle`, so a
+delisting surfaces without a code change; if the probe itself fails the response
+says `liveness: unverified` rather than reporting everything idle.
+
+### Reading the technical score
+
+The indicator and scoring engines are shared with equities and every value is
+still computed locally — but two components mean something different here, and
+each crypto response repeats this in its `caveats`:
+
+- **Volume-derived values** (`relativeVolume`, `avgDollarVolume`, and hence the
+  score's `liquidity` component) reflect **Alpaca's US venue alone**, not
+  aggregate market volume. A low liquidity component here is not evidence that
+  the asset is thinly traded.
+- **Calendar windows.** Crypto trades 24/7, so a 200-day window spans fewer
+  market events per bar than 200 equity sessions.
+
+Crypto responses carry `CRYPTO_DISCLAIMER` rather than the equity one: no
+issuer, no listing standards, no circuit breakers, and venue-specific pricing.
 
 ## Quick start
 
