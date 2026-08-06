@@ -488,3 +488,50 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
   .lookup-row { grid-template-columns: 4.4rem 1fr; }
   .lookup-meta { display: none; }
 }
+
+/* Crypto ------------------------------------------------------------------
+   The grid is its own component rather than a reuse of .cards: a crypto tile
+   is a price quote read at a glance, not a research card with a body. */
+.cxgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.cxcard {
+  position: relative; overflow: hidden;
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 15px; transition: border-color .15s, transform .15s, background .15s;
+}
+.cxcard:hover { border-color: var(--accent-2); transform: translateY(-2px); background: var(--panel-2); }
+.cxcard:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+/* Direction rail, matching the .card::before idiom on the stock side. */
+.cxcard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--dim); opacity: .55; }
+.cxcard.positive::before { background: var(--pos); opacity: .9; }
+.cxcard.negative::before { background: var(--neg); opacity: .9; }
+.cx-top { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+.cx-sym { font-family: var(--mono); font-weight: 800; font-size: 15px; color: var(--accent); }
+.cx-quote { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.cx-name { color: var(--dim); font-size: 11.5px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.cx-price { font-family: var(--mono); font-size: 21px; font-weight: 800; margin: 8px 0 4px; letter-spacing: -.01em; }
+.cx-sub { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; }
+.cx-spread { color: var(--dim); font-size: 11px; margin-left: auto; }
+.cx-dim { color: var(--dim); }
+
+/* The auto-refresh toggle sits inline with the controls row. */
+.cx-live { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; cursor: pointer; user-select: none; }
+.cx-live input { accent-color: var(--accent); cursor: pointer; }
+
+.cx-caveats { margin: 10px 0 0; padding-left: 18px; color: var(--dim); font-size: 12.5px; line-height: 1.65; }
+.cx-caveats li + li { margin-top: 6px; }
+
+/* Order book: two columns, monospace so the price digits line up vertically. */
+.obgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+.ob-head { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.ob-row { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); font-size: 12.5px; padding: 3px 6px; border-radius: 5px; }
+.ob-row.bid .ob-p { color: var(--pos); }
+.ob-row.ask .ob-p { color: var(--neg); }
+.ob-row .ob-s { color: var(--dim); }
+.ob-row:nth-child(even) { background: rgba(255,255,255,.02); }
+
+@media (max-width: 560px) {
+  .cxgrid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .cx-price { font-size: 18px; }
+  .cx-name { display: none; }
+}

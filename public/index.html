@@ -22,6 +22,7 @@
         <button data-view="watchlist">Watchlist</button>
         <button data-view="search">Search</button>
         <button data-view="signals">Signals</button>
+        <button data-view="crypto">Crypto</button>
         <button data-view="about">About</button>
       </nav>
       <div class="creditbar" id="creditbar"></div>
@@ -97,6 +98,27 @@
           <button id="sig-run" class="primary">Load signals</button>
         </div>
         <div id="signals-out" class="results"></div>
+      </section>
+
+      <!-- Crypto -->
+      <section class="view" data-view="crypto">
+        <div class="controls">
+          <!-- Accepts an asset name as well as a pair: "bitcoin" resolves to
+               BTC/USD through /crypto/lookup, same as the ticker box does. -->
+          <div class="lookup" data-lookup="cx-find">
+            <input id="cx-find" type="search" placeholder="Find a pair by name or symbol (e.g. bitcoin or BTC/USD)"
+                   autocomplete="off" maxlength="64" role="combobox" aria-expanded="false"
+                   aria-autocomplete="list" aria-controls="cx-find-results" />
+            <div class="lookup-results" id="cx-find-results" role="listbox" hidden></div>
+          </div>
+          <button id="cx-refresh" class="primary">Refresh</button>
+          <label class="cx-live" title="Crypto trades 24/7 — refresh the grid every 30s while this tab is open">
+            <input type="checkbox" id="cx-auto" /> <span>Auto</span>
+          </label>
+        </div>
+        <p class="hint">Live crypto prices from Alpaca's US crypto venue — the same market-data account behind the stock side. Click any pair for candles, indicators and depth. Volume figures are venue-only, not aggregate market volume.</p>
+        <div id="cx-summary" class="summary"></div>
+        <div id="cx-grid" class="cxgrid"></div>
       </section>
 
       <!-- About -->
