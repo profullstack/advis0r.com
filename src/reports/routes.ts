@@ -47,6 +47,11 @@ export interface ReportRouteDeps {
    * Optional so the report routes stay usable without the symbol directory.
    */
   suggest?: (query: string) => Promise<{ symbol: string; name: string } | null>;
+  /**
+   * Pre-rendered `<url>` elements appended to the sitemap — the crypto pages,
+   * which are not stored reports and so have no row to enumerate.
+   */
+  extraSitemapUrls?: string;
 }
 
 const json = (body: unknown, status = 200) =>
@@ -85,7 +90,7 @@ export async function handleReportRoute(
   const url = new URL(req.url);
 
   if (path === "/sitemap.xml") {
-    return new Response(renderSitemap(await allReportRefs(deps.db), deps.appUrl), {
+    return new Response(renderSitemap(await allReportRefs(deps.db), deps.appUrl, deps.extraSitemapUrls), {
       headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" },
     });
   }
@@ -120,17 +125,26 @@ export async function handleReportRoute(
     });
   }
 
+  // `/ticker/<SYMBOL>` was the original path. It is kept as a permanent
+  // redirect rather than dropped: those URLs are in sitemaps, digest emails
+  // and anywhere a report has already been shared, and a shareable page that
+  // stops resolving is worse than an extra hop.
   if (path.startsWith("/ticker/")) {
-    const raw = decodeURIComponent(path.slice("/ticker/".length)).replace(/\/$/, "");
+    const rest = path.slice("/ticker/".length).replace(/\/$/, "");
+    return Response.redirect(`${deps.appUrl.replace(/\/$/, "")}/stocks/${rest}`, 301);
+  }
+
+  if (path.startsWith("/stocks/")) {
+    const raw = decodeURIComponent(path.slice("/stocks/".length)).replace(/\/$/, "");
     const symbol = normalizeSymbol(raw);
     if (!symbol) {
-      // /ticker/rivian is someone guessing a URL from a company name. Sending
+      // /stocks/rivian is someone guessing a URL from a company name. Sending
       // them to the right page beats a dead end — that guess is exactly the
       // behaviour the symbol directory exists to rescue.
       const hit = await deps.suggest?.(raw).catch(() => null);
       if (hit) {
         return Response.redirect(
-          `${deps.appUrl.replace(/\/$/, "")}/ticker/${encodeURIComponent(hit.symbol)}`,
+          `${deps.appUrl.replace(/\/$/, "")}/stocks/${encodeURIComponent(hit.symbol)}`,
           302,
         );
       }
@@ -139,9 +153,9 @@ export async function handleReportRoute(
         404,
       );
     }
-    // Canonicalize case so /ticker/nvda and /ticker/NVDA are not two pages.
+    // Canonicalize case so /stocks/nvda and /stocks/NVDA are not two pages.
     if (raw !== symbol) {
-      return Response.redirect(`${deps.appUrl.replace(/\/$/, "")}/ticker/${symbol}`, 301);
+      return Response.redirect(`${deps.appUrl.replace(/\/$/, "")}/stocks/${symbol}`, 301);
     }
     const report = await loadReport(deps.db, symbol);
     return report

@@ -493,9 +493,12 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
    The grid is its own component rather than a reuse of .cards: a crypto tile
    is a price quote read at a glance, not a research card with a body. */
 .cxgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+/* An <a>, so it is shareable and middle-clickable — reset the link styling
+   rather than the button styling it used to need. */
 .cxcard {
-  position: relative; overflow: hidden;
+  display: block; position: relative; overflow: hidden;
   text-align: left; font: inherit; color: inherit; cursor: pointer;
+  text-decoration: none;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
   padding: 14px 15px; transition: border-color .15s, transform .15s, background .15s;
 }

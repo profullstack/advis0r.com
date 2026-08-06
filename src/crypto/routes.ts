@@ -23,6 +23,8 @@ import { CRYPTO_DISCLAIMER } from "../compliance.ts";
 import { calculateIndicators, scoreTechnicalSetup } from "../technical/indicators.ts";
 import type { BarTimeframe, IndicatorConfig, MarketBar } from "../types.ts";
 import type { AlpacaCryptoClient } from "./client.ts";
+import { analyzeCrypto } from "./analysis.ts";
+import { renderCryptoIndexPage, renderCryptoPage, renderMissingCryptoPage } from "./page.ts";
 import { SUPPORTED_PAIRS, getPair, lookupPairs, normalizePair, normalizePairs } from "./pairs.ts";
 
 const json = (body: unknown, status = 200, cacheSeconds = 0) =>
@@ -30,6 +32,15 @@ const json = (body: unknown, status = 200, cacheSeconds = 0) =>
     status,
     headers: {
       "content-type": "application/json",
+      "cache-control": cacheSeconds ? `public, max-age=${cacheSeconds}` : "no-store",
+    },
+  });
+
+const htmlResponse = (body: string, status = 200, cacheSeconds = 0) =>
+  new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
       "cache-control": cacheSeconds ? `public, max-age=${cacheSeconds}` : "no-store",
     },
   });
@@ -60,26 +71,34 @@ const RESERVED = new Set([
 export interface CryptoRouteDeps {
   client: AlpacaCryptoClient;
   indicators: IndicatorConfig;
+  /** Absolute site origin, for canonical URLs on the rendered pages. */
+  appUrl: string;
 }
 
 /**
  * Returns null when `path` is not a crypto route, so the caller falls through
  * to its other handlers.
+ *
+ * Two prefixes, and the difference is what a human versus a program gets:
+ * `/crypto/<PAIR>` renders a shareable HTML page, `/api/crypto/<PAIR>` returns
+ * the same data as JSON. The named data endpoints (assets, quote, bars, …)
+ * answer JSON under either prefix — they have no page form.
  */
 export async function handleCryptoRoute(
   req: Request,
   path: string,
   deps: CryptoRouteDeps,
 ): Promise<Response | null> {
-  const rest = cryptoSubPath(path);
-  if (rest === null) return null;
+  const matched = cryptoSubPath(path);
+  if (!matched) return null;
   if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+  const { rest, api } = matched;
 
   const url = new URL(req.url);
   try {
     switch (rest) {
       case "":
-        return index(deps);
+        return api ? index(deps) : await indexPage(deps);
       case "assets":
         return await assets(deps);
       case "lookup":
@@ -100,11 +119,23 @@ export async function handleCryptoRoute(
       case "report":
         return await report(url.searchParams.get("symbol"), url, deps);
     }
-    // /crypto/<PAIR> — the shareable path form of /crypto/report.
-    return await report(rest, url, deps);
+    // A pair: a page under /crypto/<PAIR>, the same data as JSON under
+    // /api/crypto/<PAIR>.
+    return api ? await report(rest, url, deps) : await pairPage(rest, deps);
   } catch (err) {
     // Upstream failures are the expected error here; surface them as 502 with
     // the reason rather than a bare 500 that hides whether it was us or Alpaca.
+    //
+    // The error must match what the route would have returned, not the prefix
+    // it came in under: `/crypto/snapshot` is a JSON endpoint that happens to
+    // live under the page prefix, and answering it with an HTML error page
+    // breaks every client parsing its response.
+    if (isPageRoute(rest, api)) {
+      return htmlResponse(
+        renderMissingCryptoPage(rest || "crypto", undefined, { appUrl: deps.appUrl }),
+        502,
+      );
+    }
     return json(
       { error: "crypto market data unavailable", detail: String(err).slice(0, 300) },
       502,
@@ -113,16 +144,26 @@ export async function handleCryptoRoute(
 }
 
 /**
- * "/api/crypto/bars" -> "bars"; "/crypto" -> ""; anything else -> null.
- * Case-insensitive and tolerant of a trailing slash.
+ * "/api/crypto/bars" -> {rest:"bars", api:true}; "/crypto" -> {rest:"", api:false}.
+ * Tolerant of a trailing slash. Order matters: "/api/crypto" must be tested
+ * first, or it would be mistaken for a pair named "crypto" under "/api".
  */
-function cryptoSubPath(path: string): string | null {
+/**
+ * Does this route render HTML? Only the directory and a pair, and only under
+ * the bare prefix — every named endpoint answers JSON under either prefix.
+ */
+function isPageRoute(rest: string, api: boolean): boolean {
+  return !api && !RESERVED.has(rest);
+}
+
+function cryptoSubPath(path: string): { rest: string; api: boolean } | null {
   for (const prefix of ["/api/crypto", "/crypto"]) {
-    if (path === prefix || path === `${prefix}/`) return "";
+    const api = prefix.startsWith("/api");
+    if (path === prefix || path === `${prefix}/`) return { rest: "", api };
     if (path.startsWith(`${prefix}/`)) {
       const rest = path.slice(prefix.length + 1).replace(/\/$/, "");
       // Only a single segment is a crypto route; deeper paths are not ours.
-      return rest.includes("/") ? null : rest;
+      return rest.includes("/") ? null : { rest, api };
     }
   }
   return null;
@@ -465,6 +506,95 @@ async function report(
       generatedAt: new Date().toISOString(),
       disclaimer: CRYPTO_DISCLAIMER,
     },
+    200,
+    30,
+  );
+}
+
+/* ---- Pages --------------------------------------------------------------
+   Rendered server-side so a link is shareable: pasted into a chat, crawled,
+   or previewed without running any JavaScript. The interactive chart in the
+   app is a progressive enhancement, not the only way to see this. */
+
+/** `/crypto` — the pair directory as a page. */
+async function indexPage(deps: CryptoRouteDeps): Promise<Response> {
+  // Prices make the index worth loading, but one dead upstream must not cost
+  // us the page: fall back to a plain list rather than an error.
+  let prices = new Map<string, { price: number; changePct: number | null }>();
+  try {
+    const majors = SUPPORTED_PAIRS.filter((p) => p.quote === "USD").slice(0, MAX_BASKET);
+    const snaps = await deps.client.getSnapshots(majors.map((p) => p.symbol));
+    for (const s of snaps) {
+      const price = s.latestTrade?.price ?? s.dailyBar?.close;
+      const prev = s.prevDailyBar?.close;
+      if (price != null) {
+        prices.set(s.symbol, {
+          price,
+          changePct: prev ? ((price - prev) / prev) * 100 : null,
+        });
+      }
+    }
+  } catch {
+    /* listed without prices */
+  }
+  return htmlResponse(
+    renderCryptoIndexPage(SUPPORTED_PAIRS, prices, { appUrl: deps.appUrl }),
+    200,
+    30,
+  );
+}
+
+/** `/crypto/<PAIR>` — one pair as a shareable page. */
+async function pairPage(raw: string, deps: CryptoRouteDeps): Promise<Response> {
+  const symbol = normalizePair(raw);
+  if (!symbol) {
+    const suggestion = raw ? lookupPairs(raw, 1)[0] : undefined;
+    return htmlResponse(
+      renderMissingCryptoPage(raw.slice(0, 32) || "—", suggestion, { appUrl: deps.appUrl }),
+      404,
+    );
+  }
+  const pair = getPair(symbol)!;
+  // Canonicalize so /crypto/btc, /crypto/BTC and /crypto/BTC-USD are one page
+  // rather than three competing for the same content.
+  if (raw !== pair.slug) {
+    return Response.redirect(`${deps.appUrl.replace(/\/$/, "")}/crypto/${pair.slug}`, 301);
+  }
+
+  const start = new Date(Date.now() - TECHNICAL_LOOKBACK_DAYS * 86_400_000).toISOString();
+  let snapshot: Awaited<ReturnType<typeof deps.client.getSnapshots>>[number] | undefined;
+  let bars: MarketBar[] = [];
+  let marketError: string | undefined;
+  try {
+    const [snaps, rows] = await Promise.all([
+      deps.client.getSnapshots([symbol]),
+      deps.client.getBars({ symbols: [symbol], timeframe: "1Day", start, end: new Date().toISOString() }),
+    ]);
+    snapshot = snaps[0];
+    bars = rows;
+  } catch (err) {
+    // Degrade to whatever we have rather than 502 the whole page.
+    marketError = String(err).slice(0, 200);
+  }
+
+  const technical = bars.length >= 2 ? calculateIndicators(bars, deps.indicators) : undefined;
+  const technicalScore = technical ? scoreTechnicalSetup(technical, 2) : undefined;
+
+  return htmlResponse(
+    renderCryptoPage(
+      {
+        pair,
+        snapshot,
+        bars,
+        technical,
+        technicalScore,
+        analysis: analyzeCrypto(pair.symbol, pair.name, technical, technicalScore),
+        caveats: SCORE_CAVEATS,
+        fetchedAt: new Date().toISOString(),
+        marketError,
+      },
+      { appUrl: deps.appUrl },
+    ),
     200,
     30,
   );

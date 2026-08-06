@@ -38,6 +38,8 @@ import { handleReportRoute } from "./reports/routes.ts";
 import { loadReport, normalizeSymbol, saveReport } from "./reports/store.ts";
 import { handleLookupRoute } from "./symbols/routes.ts";
 import { handleCryptoRoute } from "./crypto/routes.ts";
+import { cryptoSitemapEntries } from "./crypto/page.ts";
+import { SUPPORTED_PAIRS } from "./crypto/pairs.ts";
 import { resolveOne } from "./symbols/lookup.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 
@@ -813,6 +815,7 @@ const server = Bun.serve({
       const cryptoResponse = await handleCryptoRoute(req, p, {
         client: registry.crypto,
         indicators: INDICATOR_CONFIG,
+        appUrl: config.appUrl,
       });
       if (cryptoResponse) return cryptoResponse;
 
@@ -829,6 +832,9 @@ const server = Bun.serve({
         appUrl: config.appUrl,
         buildReport: tickerDetail,
         suggest: (q) => resolveOne(db, q, { localOnly: false }),
+        // Crypto pages are rendered live rather than stored, so they have no
+        // report row to enumerate — they come from the static pair directory.
+        extraSitemapUrls: cryptoSitemapEntries(SUPPORTED_PAIRS, config.appUrl),
       });
       if (reportResponse) return reportResponse;
 

@@ -136,15 +136,31 @@ signed when the keys are present and unsigned when they are not. That is why
 there is no Yahoo-style fallback on this path — the primary source degrades to
 itself rather than to a second vendor with different provenance.
 
-In the web dashboard this is the **Crypto** tab: a live grid of the majors
-(click any pair for candles, indicators and depth), a name-or-symbol picker, and
-an opt-in 30s auto-refresh that only ticks while that tab is actually on screen.
-Prices are fetched when the tab is first opened rather than on boot, so a
-visitor who never looks at it costs no upstream calls. Deep link one pair with
-`/?pair=BTC-USD`.
+In the web dashboard this is the **Crypto** tab: a live grid of the majors, a
+name-or-symbol picker, and an opt-in 30s auto-refresh that only ticks while that
+tab is actually on screen. Prices are fetched when the tab is first opened
+rather than on boot, so a visitor who never looks at it costs no upstream calls.
 
-Everything crypto is namespaced under **`/crypto/**`**. `/api/crypto/**` is an
-alias for the identical surface.
+### Pages vs JSON
+
+Every detail view is a **real page at a real URL**, server-rendered, so it can be
+pasted into a chat, crawled, or previewed without running JavaScript:
+
+| Path | Serves |
+| --- | --- |
+| `/crypto` | the pair directory, with live prices |
+| `/crypto/<PAIR>` | one pair: pricing, sparkline, technicals, analysis |
+| `/stocks/<TICKER>` | the stored stock report |
+| `/api/crypto` | the JSON index |
+| `/api/crypto/<PAIR>` | the same pair data as JSON |
+
+`/ticker/<TICKER>` permanently redirects to `/stocks/<TICKER>` — those URLs are
+in sitemaps, digest emails, and anywhere a report was already shared, so they
+keep resolving. Pair paths canonicalize too: `/crypto/btc` → `/crypto/BTC-USD`.
+
+The named data endpoints below answer JSON under **either** prefix; only the
+directory and a pair have a page form. The interactive candlestick view remains
+in the app, linked from each page (`/?pair=BTC-USD`).
 
 | Endpoint | Returns |
 | --- | --- |
@@ -188,6 +204,22 @@ seed, not a guess: every entry returned a real bar from Alpaca on 2026-08-06.
 `/crypto/assets` re-probes hourly and marks each pair `live` or `idle`, so a
 delisting surfaces without a code change; if the probe itself fails the response
 says `liveness: unverified` rather than reporting everything idle.
+
+### Analysis
+
+Crypto gets its **own** analyzer ([`src/crypto/analysis.ts`](src/crypto/analysis.ts)),
+not the equity one. The stock analyzer reasons about executive communications,
+SEC filings and fundamentals; a digital asset has none of those. Running it here
+would produce a confident-looking report grounded in nothing — `catalystScore`
+falls out of an empty transcript evidence set as 0, and every
+fundamentals-derived component silently defaults.
+
+So the crypto analysis reads **only** the locally computed indicators, states
+what they say in prose, and lists what it structurally cannot see (no issuer
+disclosure, venue-only volume, no on-chain data). It invents no numbers: every
+figure in the output was passed into it. When there is not enough history to
+compute indicators, it returns nothing and the page says so, rather than
+rendering an empty Analysis heading.
 
 ### Reading the technical score
 
