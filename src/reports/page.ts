@@ -1,5 +1,5 @@
 /**
- * Server-rendered report pages: `/ticker/<SYMBOL>` and the `/reports` index.
+ * Server-rendered report pages: `/stocks/<SYMBOL>`, `/crypto/<PAIR>` and the `/reports` index.
  *
  * These are real pages, not an SPA route, for three reasons that all follow from
  * the reports being persistent artifacts:
@@ -38,14 +38,14 @@ function big(n: unknown): string {
   return `$${v.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
-function num(n: unknown, digits = 2): string {
+export function num(n: unknown, digits = 2): string {
   const v = Number(n);
   return n == null || !Number.isFinite(v)
     ? "—"
     : v.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
-function score(n: unknown): string {
+export function score(n: unknown): string {
   const v = Number(n);
   return n == null || !Number.isFinite(v) ? "—" : `${Math.round(v)}<span class="rp-of">/100</span>`;
 }
@@ -72,7 +72,7 @@ export function relativeTime(iso: string, now = new Date()): string {
   return `${years} year${years === 1 ? "" : "s"} ago`;
 }
 
-function absoluteTime(iso: string): string {
+export function absoluteTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? iso
@@ -97,7 +97,14 @@ interface Bar { t?: string; c?: number }
  * Inline SVG close-price line. Returns "" for too few points rather than
  * drawing a degenerate chart that implies a trend from one dot.
  */
-export function sparkline(bars: Bar[], opts: { width?: number; height?: number } = {}): string {
+export function sparkline(
+  bars: Bar[],
+  // `format` exists because crypto spans four more orders of magnitude than an
+  // equity: the default formatter renders a 52-week high as "$109649.47" with
+  // no separators, which is jarring next to the same figure in the page body.
+  opts: { width?: number; height?: number; format?: (n: unknown) => string } = {},
+): string {
+  const fmt = opts.format ?? money;
   const closes = bars.map((b) => Number(b.c)).filter((n) => Number.isFinite(n));
   if (closes.length < 2) return "";
   const w = opts.width ?? 720;
@@ -118,7 +125,7 @@ export function sparkline(bars: Bar[], opts: { width?: number; height?: number }
 
   return `<figure class="rp-spark">
     <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
-         aria-label="Closing price from ${e(first)} to ${e(last)}: ${money(closes[0])} to ${money(closes.at(-1))}">
+         aria-label="Closing price from ${e(first)} to ${e(last)}: ${fmt(closes[0])} to ${fmt(closes.at(-1))}">
       <defs><linearGradient id="rpg" x1="0" x2="0" y1="0" y2="1">
         <stop offset="0%" stop-color="${stroke}" stop-opacity=".28"/>
         <stop offset="100%" stop-color="${stroke}" stop-opacity="0"/>
@@ -127,7 +134,7 @@ export function sparkline(bars: Bar[], opts: { width?: number; height?: number }
       <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2"
             stroke-linejoin="round" stroke-linecap="round"/>
     </svg>
-    <figcaption>${e(String(first).slice(0, 10))} → ${e(String(last).slice(0, 10))} · low ${money(min)} · high ${money(max)}</figcaption>
+    <figcaption>${e(String(first).slice(0, 10))} → ${e(String(last).slice(0, 10))} · low ${fmt(min)} · high ${fmt(max)}</figcaption>
   </figure>`;
 }
 
@@ -142,7 +149,7 @@ export interface PageMeta {
   jsonLd?: unknown;
 }
 
-function shell(meta: PageMeta, body: string): string {
+export function shell(meta: PageMeta, body: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -169,7 +176,7 @@ ${meta.jsonLd ? `<script type="application/ld+json">${JSON.stringify(meta.jsonLd
 <body class="rp-body">
 <header class="rp-top">
   <a class="rp-brand" href="/"><img src="/icon.svg" alt="" width="26" height="26"><span>advis0r<span class="dim">.com</span></span></a>
-  <nav class="rp-nav"><a href="/reports">All reports</a><a href="/#watchlist">Watchlist</a><a href="/#about">About</a></nav>
+  <nav class="rp-nav"><a href="/reports">All reports</a><a href="/crypto">Crypto</a><a href="/#watchlist">Watchlist</a><a href="/#about">About</a></nav>
 </header>
 <main class="rp-main">
 ${body}
@@ -281,7 +288,7 @@ export function renderReportPage(report: StoredReport, opts: ReportPageOptions):
   const p = report.payload as Record<string, any>;
   const ticker = report.ticker;
   const base = opts.appUrl.replace(/\/$/, "");
-  const canonical = `${base}/ticker/${encodeURIComponent(ticker)}`;
+  const canonical = `${base}/stocks/${encodeURIComponent(ticker)}`;
   const t = p.technical ?? {};
   const f = p.facts ?? {};
   const ai = p.aiAnalysis;
@@ -404,7 +411,7 @@ export function renderMissingReportPage(ticker: string, opts: ReportPageOptions)
     {
       title: `${ticker} — no report yet · advis0r.com`,
       description: `No research report has been generated for ${ticker} yet.`,
-      canonical: `${base}/ticker/${encodeURIComponent(ticker)}`,
+      canonical: `${base}/stocks/${encodeURIComponent(ticker)}`,
       robots: "noindex, follow",
     },
     `<article class="rp-report rp-empty">
@@ -432,7 +439,7 @@ export function renderReportIndex(
   const rows = reports
     .map(
       (r) => `<li class="rp-row">
-        <a class="rp-row-tick" href="/ticker/${encodeURIComponent(r.ticker)}">${e(r.ticker)}</a>
+        <a class="rp-row-tick" href="/stocks/${encodeURIComponent(r.ticker)}">${e(r.ticker)}</a>
         <span class="rp-row-name">${e(r.companyName ?? "")}</span>
         <span class="rp-row-price">${money(r.lastPrice)}</span>
         <span class="rp-row-score">${r.overallScore != null ? score(r.overallScore) : "—"}</span>
@@ -468,14 +475,18 @@ export function renderReportIndex(
 export function renderSitemap(
   refs: Array<{ ticker: string; generatedAt: string }>,
   appUrl: string,
+  /** Extra `<url>` elements, e.g. the crypto pages. Already XML-escaped. */
+  extraUrls = "",
 ): string {
   const base = appUrl.replace(/\/$/, "");
   const urls = [
     `<url><loc>${escapeXml(base)}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
     `<url><loc>${escapeXml(base)}/reports</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`,
+    `<url><loc>${escapeXml(base)}/crypto</loc><changefreq>hourly</changefreq><priority>0.8</priority></url>`,
+    ...(extraUrls ? [extraUrls] : []),
     ...refs.map(
       (r) =>
-        `<url><loc>${escapeXml(base)}/ticker/${encodeURIComponent(r.ticker)}</loc>` +
+        `<url><loc>${escapeXml(base)}/stocks/${encodeURIComponent(r.ticker)}</loc>` +
         `<lastmod>${escapeXml(r.generatedAt.slice(0, 10))}</lastmod>` +
         `<changefreq>weekly</changefreq><priority>0.6</priority></url>`,
     ),

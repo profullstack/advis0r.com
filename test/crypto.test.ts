@@ -95,7 +95,15 @@ const get = (path: string, client = fakeClient()) =>
   handleCryptoRoute(new Request(`https://advis0r.com${path}`), path.split("?")[0]!, {
     client,
     indicators: INDICATORS,
+    appUrl: "https://advis0r.com",
   });
+
+/** HTML body of a page response. */
+async function pageText(res: Response | null): Promise<string> {
+  expect(res).not.toBeNull();
+  expect(res!.headers.get("content-type")).toContain("text/html");
+  return res!.text();
+}
 
 async function body(res: Response | null): Promise<any> {
   expect(res).not.toBeNull();
@@ -178,19 +186,29 @@ describe("route dispatch", () => {
     expect(await get("/crypto/BTC-USD/extra")).toBeNull();
   });
 
-  test("/crypto and /api/crypto are the same surface", async () => {
-    const a = await body(await get("/crypto"));
-    const b = await body(await get("/api/crypto"));
-    expect(a).toEqual(b);
-    expect(a.endpoints["GET /crypto/assets"]).toBeTruthy();
+  test("/crypto is a page, /api/crypto is the JSON index", async () => {
+    // The split people actually care about: a link you can paste renders,
+    // and a program still gets structured data at the /api prefix.
+    const page = await pageText(await get("/crypto"));
+    expect(page).toContain("<!doctype html>");
+    expect(page).toContain('href="/crypto/BTC-USD"');
+
+    const api = await body(await get("/api/crypto"));
+    expect(api.endpoints["GET /crypto/assets"]).toBeTruthy();
+  });
+
+  test("a pair renders as a page, and as JSON under /api", async () => {
+    const page = await pageText(await get("/crypto/BTC-USD"));
+    expect(page).toContain("BTC/USD");
+    expect(page).toContain("Bitcoin");
+
+    const jsonReport = await body(await get("/api/crypto/BTC-USD"));
+    expect(jsonReport.symbol).toBe("BTC/USD");
+    expect(jsonReport.technicalScore).toBeTruthy();
   });
 
   test("a pair path is not shadowed by the named routes", async () => {
-    const report = await body(await get("/crypto/BTC-USD"));
-    expect(report.symbol).toBe("BTC/USD");
-    expect(report.name).toBe("Bitcoin");
-    expect(report.technicalScore).toBeTruthy();
-    // "bars" is reserved, so it stays the bars endpoint.
+    // "bars" is reserved, so it stays the bars endpoint under both prefixes.
     const bars = await body(await get("/crypto/bars?symbol=BTC/USD"));
     expect(bars.timeframe).toBe("1Day");
   });
@@ -199,7 +217,7 @@ describe("route dispatch", () => {
     const res = await handleCryptoRoute(
       new Request("https://advis0r.com/crypto/assets", { method: "POST" }),
       "/crypto/assets",
-      { client: fakeClient(), indicators: INDICATORS },
+      { client: fakeClient(), indicators: INDICATORS, appUrl: "https://advis0r.com" },
     );
     expect(res!.status).toBe(405);
   });
@@ -279,7 +297,7 @@ describe("data routes", () => {
     // number without that note invites it to be read as illiquidity.
     const res = await body(await get("/crypto/technicals?symbol=BTC/USD"));
     expect(res.caveats.join(" ")).toContain("Alpaca's US crypto venue alone");
-    const report = await body(await get("/crypto/BTC-USD"));
+    const report = await body(await get("/api/crypto/BTC-USD"));
     expect(report.caveats).toBeTruthy();
   });
 
@@ -354,19 +372,25 @@ describe("errors", () => {
 });
 
 describe("compliance", () => {
-  test("every data response carries the crypto disclaimer", async () => {
+  test("every JSON response carries the crypto disclaimer", async () => {
     for (const path of [
-      "/crypto",
+      "/api/crypto",
       "/crypto/assets",
       "/crypto/snapshot?symbols=BTC/USD",
       "/crypto/quote?symbol=BTC/USD",
       "/crypto/bars?symbol=BTC/USD",
       "/crypto/orderbook?symbol=BTC/USD",
       "/crypto/technicals?symbol=BTC/USD",
-      "/crypto/BTC-USD",
+      "/api/crypto/BTC-USD",
     ]) {
       const b = await body(await get(path));
       expect(b.disclaimer).toContain("not a guarantee");
+    }
+  });
+
+  test("every rendered page carries it too", async () => {
+    for (const path of ["/crypto", "/crypto/BTC-USD"]) {
+      expect(await pageText(await get(path))).toContain("not a guarantee");
     }
   });
 });

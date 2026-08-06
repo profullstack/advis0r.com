@@ -155,15 +155,19 @@ const type = (el: any, value: string) => {
   el.value = value;
   el.dispatchEvent(new win.Event("input", { bubbles: true }));
 };
+/** Cards are addressed by their destination now that they are links. */
+const cardFor = (pair: string) =>
+  $$(".cxcard").find((c: any) => c.getAttribute("href") === `/crypto/${pair.replace("/", "-")}`);
 
-async function loadPage(hash = "#crypto") {
+/** `where` is anything after the origin: "#crypto", "?pair=BTC-USD". */
+async function loadPage(where = "#crypto") {
   pageErrors = [];
   const vc = new VirtualConsole();
   vc.on("jsdomError", (e: Error) => pageErrors.push(e.message));
   vc.on("error", (...a: unknown[]) => pageErrors.push(a.join(" ")));
 
   dom = new JSDOM(read("index.html"), {
-    url: `http://localhost/${hash}`,
+    url: `http://localhost/${where}`,
     runScripts: "outside-only",
     pretendToBeVisual: true,
     virtualConsole: vc,
@@ -212,14 +216,21 @@ describe("crypto tab", () => {
   test("the grid renders one card per pair", () => {
     const cards = $$(".cxcard");
     expect(cards.length).toBe(12);
-    expect(cards[0].dataset.crypto).toBe("BTC/USD");
     expect(text("#cx-summary")).toContain("12 pairs");
     expect(text("#cx-summary")).toContain("Alpaca US crypto venue");
   });
 
+  test("every card is a real link to a shareable page", () => {
+    // The regression this locks down: these were <button>s that opened a modal,
+    // so the URL never changed and there was nothing to copy or crawl.
+    const cards = $$(".cxcard");
+    expect(cards.every((c: any) => c.tagName === "A")).toBe(true);
+    expect(cards.map((c: any) => c.getAttribute("href"))).toContain("/crypto/BTC-USD");
+    expect(cards.every((c: any) => /^\/crypto\/[A-Z0-9]+-[A-Z]+$/.test(c.getAttribute("href")))).toBe(true);
+  });
+
   test("prices keep precision across four orders of magnitude", () => {
-    const priceOf = (pair: string) =>
-      $$(".cxcard").find((c: any) => c.dataset.crypto === pair)?.querySelector(".cx-price")?.textContent;
+    const priceOf = (pair: string) => cardFor(pair)?.querySelector(".cx-price")?.textContent;
     // The bug this guards: a fixed 2dp renders DOGE as "$0.00".
     expect(priceOf("BTC/USD")).toBe("$64,250.50");
     expect(priceOf("DOGE/USD")).toBe("$0.06893");
@@ -228,8 +239,8 @@ describe("crypto tab", () => {
   });
 
   test("direction is shown as a signed percent and a card modifier", () => {
-    const up = $$(".cxcard").find((c: any) => c.dataset.crypto === "BTC/USD");
-    const down = $$(".cxcard").find((c: any) => c.dataset.crypto === "ETH/USD");
+    const up = cardFor("BTC/USD");
+    const down = cardFor("ETH/USD");
     expect(up.classList.contains("positive")).toBe(true);
     expect(up.querySelector(".cx-sub").textContent).toContain("+0.39%");
     expect(down.classList.contains("negative")).toBe(true);
@@ -243,10 +254,16 @@ describe("crypto tab", () => {
   });
 });
 
-describe("crypto detail modal", () => {
+/**
+ * The modal is no longer how you reach a pair — cards link to pages now. It
+ * survives as the in-app interactive chart, reached from the page via
+ * "Open the interactive chart" (/?pair=BTC-USD), so it is still worth testing.
+ */
+describe("crypto interactive view", () => {
   beforeEach(async () => {
-    click($$(".cxcard").find((c: any) => c.dataset.crypto === "BTC/USD"));
-    await sleep(200);
+    // Reached the way a person reaches it: the link on the rendered page.
+    await loadPage("?pair=BTC-USD");
+    await sleep(350);
   });
 
   test("opens and finishes loading", () => {
@@ -290,14 +307,20 @@ describe("crypto lookup", () => {
     expect(rows[0].querySelector(".lookup-meta").textContent.trim()).toBe("USD");
   });
 
-  test("picking a row opens that pair", async () => {
+  test("picking a row navigates away instead of opening a modal", async () => {
+    // jsdom locks `location` down completely — it cannot be stubbed, and its
+    // "Not implemented: navigation to another Document" error does not name the
+    // destination. So this asserts the behaviour change that matters (it left
+    // the page rather than opening an unshareable modal); the *destination* is
+    // covered by the card-href test above, which reads a real href.
     type($("#cx-find"), "bitcoin");
     await sleep(400);
-    const row = $("#cx-find-results .lookup-row");
-    row.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true }));
+    $("#cx-find-results .lookup-row").dispatchEvent(
+      new win.MouseEvent("mousedown", { bubbles: true }),
+    );
     await sleep(250);
-    expect($("#detail").classList.contains("hidden")).toBe(false);
-    expect(text("#detail-panel")).toContain("BTC/USD");
+    expect(pageErrors.join(" ")).toContain("navigation to another Document");
+    expect($("#detail").classList.contains("hidden")).toBe(true);
   });
 });
 

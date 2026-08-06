@@ -905,7 +905,7 @@ function reportMetaHtml(d) {
       ? `<span class="rp-hint">Add to your watchlist to regenerate</span>`
       : "";
   return `<span class="rp-stamp-t">Snapshot ${esc(timeAgo(d.reportGeneratedAt))}</span>
-    <a class="rp-permalink" href="/ticker/${encodeURIComponent(ticker)}" target="_blank" rel="noopener">Full report ↗</a>
+    <a class="rp-permalink" href="/stocks/${encodeURIComponent(ticker)}" target="_blank" rel="noopener">Full report ↗</a>
     ${regen}`;
 }
 
@@ -1078,8 +1078,14 @@ function closeDetail() {
 document.addEventListener("click", (e) => {
   const sh = e.target.closest(".sharpen-btn");
   if (sh && sh.dataset.sharpen) { e.preventDefault(); sharpen(sh.dataset.sharpen); return; }
+  // `.tlink` used to open the modal. It navigates to the report page now, so
+  // the address bar holds something worth sharing.
   const link = e.target.closest(".tlink");
-  if (link && link.dataset.ticker) { e.preventDefault(); openTicker(link.dataset.ticker); return; }
+  if (link && link.dataset.ticker) {
+    e.preventDefault();
+    location.href = `/stocks/${encodeURIComponent(link.dataset.ticker)}`;
+    return;
+  }
   if (e.target.closest("[data-close]")) closeDetail();
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
@@ -1129,9 +1135,10 @@ function renderMyWatchlist(items) {
   list.innerHTML = items.length
     ? items.map((i) => `<div class="card wl-row" data-ticker="${esc(i.ticker)}">
         <div class="wl-main">
-          <!-- A real href so the report can be opened in a new tab or shared;
-               the click handler intercepts it and opens the modal instead. -->
-          <a href="/ticker/${encodeURIComponent(i.ticker)}" class="wl-tick" data-detail="${esc(i.ticker)}">${esc(i.ticker)}</a>
+          <!-- Navigates to the shareable report page. It used to be intercepted
+               into a modal, which meant the URL never changed and there was
+               nothing to copy. -->
+          <a href="/stocks/${encodeURIComponent(i.ticker)}" class="wl-tick">${esc(i.ticker)}</a>
           ${i.note ? `<span class="wl-note">${esc(i.note)}</span>` : ""}
         </div>
         <button class="wl-remove" data-remove="${esc(i.ticker)}" title="Remove from watchlist">Remove</button>
@@ -1270,10 +1277,6 @@ document.addEventListener("click", (e) => {
   if (rm) { e.preventDefault(); toggleWatch(rm.dataset.remove); return; }
   const w = e.target.closest("[data-watch]");
   if (w) { e.preventDefault(); toggleWatch(w.dataset.watch); return; }
-  const d = e.target.closest("[data-detail]");
-  if (d) { e.preventDefault(); openTicker(d.dataset.detail); return; }
-  const cx = e.target.closest("[data-crypto]");
-  if (cx) { e.preventDefault(); openCryptoPair(cx.dataset.crypto); return; }
 });
 
 async function toggleWatchAdd(ticker) {
@@ -1528,7 +1531,10 @@ function cryptoCard(s) {
   const spreadBps = q && q.askPrice && q.bidPrice
     ? ((q.askPrice - q.bidPrice) / ((q.askPrice + q.bidPrice) / 2)) * 10000
     : null;
-  return `<button class="cxcard ${dir}" data-crypto="${esc(s.symbol)}" type="button">
+  // An anchor, not a button: this has to be shareable, middle-clickable and
+  // crawlable. The destination renders server-side, so it works before this
+  // script has run at all.
+  return `<a class="cxcard ${dir}" href="/crypto/${esc(pairSlug(s.symbol))}">
     <div class="cx-top">
       <span class="cx-sym">${esc(s.base)}</span>
       <span class="cx-quote">/${esc(s.quote)}</span>
@@ -1540,7 +1546,7 @@ function cryptoCard(s) {
         : `<span class="sig-dir ${dir}">${chg.percent >= 0 ? "+" : ""}${chg.percent.toFixed(2)}%</span>`}
       ${spreadBps != null ? `<span class="cx-spread" title="Bid/ask spread">${spreadBps.toFixed(1)} bps</span>` : ""}
     </div>
-  </button>`;
+  </a>`;
 }
 
 async function loadCryptoGrid() {
@@ -1699,7 +1705,7 @@ async function openCryptoPair(pair) {
    dropdown can offer BTC/USD, BTC/USDT and BTC/USDC rather than guessing. */
 attachLookup(
   document.getElementById("cx-find"),
-  (m) => openCryptoPair(m.symbol),
+  (m) => { location.href = `/crypto/${pairSlug(m.symbol)}`; },
   {
     url: (q) => `/crypto/lookup?q=${encodeURIComponent(q)}&limit=8`,
     meta: (m) => esc(m.quote || ""),

@@ -287,7 +287,7 @@ describe("report page", () => {
   });
 
   test("is self-describing to crawlers and preview cards", () => {
-    expect(page).toContain(`<link rel="canonical" href="https://advis0r.com/ticker/AAA">`);
+    expect(page).toContain(`<link rel="canonical" href="https://advis0r.com/stocks/AAA">`);
     expect(page).toContain(`<meta property="og:title"`);
     expect(page).toContain(`application/ld+json`);
     expect(page).toContain(`"@type":"Report"`);
@@ -354,7 +354,7 @@ describe("index page and sitemap", () => {
       [{ ticker: "AAA", companyName: "AAA Industries", lastPrice: 12.34, overallScore: 71, sourceCount: 2, signalCount: 0, generatedAt: "2026-08-03T09:00:00Z", aiProvider: "anthropic" }],
       { appUrl: APP_URL, total: 1, sort: "recent", now: new Date("2026-08-03T12:00:00Z") },
     );
-    expect(out).toContain(`href="/ticker/AAA"`);
+    expect(out).toContain(`href="/stocks/AAA"`);
     expect(out).toContain("3 hours ago");
     expect(out).toContain("1 ticker covered");
   });
@@ -370,8 +370,8 @@ describe("index page and sitemap", () => {
       APP_URL,
     );
     expect(xml.startsWith("<?xml")).toBe(true);
-    expect(xml).toContain("<loc>https://advis0r.com/ticker/AAA</loc>");
-    expect(xml).toContain("<loc>https://advis0r.com/ticker/BRK.B</loc>");
+    expect(xml).toContain("<loc>https://advis0r.com/stocks/AAA</loc>");
+    expect(xml).toContain("<loc>https://advis0r.com/stocks/BRK.B</loc>");
     expect(xml).toContain("<lastmod>2026-08-03</lastmod>");
   });
 });
@@ -392,26 +392,41 @@ describe("report routes", () => {
     handleReportRoute(new Request(`${APP_URL}${path}`, init), path.split("?")[0]!, deps());
 
   test("serves a stored report page", async () => {
-    const res = await route("/ticker/AAA");
+    const res = await route("/stocks/AAA");
     expect(res!.status).toBe(200);
     expect(res!.headers.get("content-type")).toContain("text/html");
     expect(await res!.text()).toContain("AAA Industries");
   });
 
   test("an unknown ticker is a 404 page, not a 500 and not the SPA", async () => {
-    const res = await route("/ticker/ZZZZ");
+    const res = await route("/stocks/ZZZZ");
     expect(res!.status).toBe(404);
     expect(await res!.text()).toContain("No report has been generated");
   });
 
   test("lower-case URLs redirect to the canonical symbol", async () => {
+    const res = await route("/stocks/aaa");
+    expect(res!.status).toBe(301);
+    expect(res!.headers.get("location")).toBe("https://advis0r.com/stocks/AAA");
+  });
+
+  test("the old /ticker/ URLs still resolve", async () => {
+    // These are in sitemaps, digest emails, and anywhere a report was already
+    // shared. A shareable page that stops resolving is worse than an extra hop.
+    const res = await route("/ticker/AAA");
+    expect(res!.status).toBe(301);
+    expect(res!.headers.get("location")).toBe("https://advis0r.com/stocks/AAA");
+  });
+
+  test("the old URLs redirect before validating, so a bad one still lands somewhere real", async () => {
     const res = await route("/ticker/aaa");
     expect(res!.status).toBe(301);
-    expect(res!.headers.get("location")).toBe("https://advis0r.com/ticker/AAA");
+    // Case is canonicalized by the /stocks/ handler on the next hop.
+    expect(res!.headers.get("location")).toBe("https://advis0r.com/stocks/aaa");
   });
 
   test("a path that is not a ticker cannot reach the store", async () => {
-    const res = await route("/ticker/..%2F..%2Fetc%2Fpasswd");
+    const res = await route("/stocks/..%2F..%2Fetc%2Fpasswd");
     expect(res!.status).toBe(404);
   });
 
@@ -429,7 +444,7 @@ describe("report routes", () => {
 
   test("reading a report never rebuilds it", async () => {
     const before = built;
-    await route("/ticker/AAA");
+    await route("/stocks/AAA");
     await route("/api/reports");
     expect(built).toBe(before);
   });
