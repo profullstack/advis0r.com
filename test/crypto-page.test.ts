@@ -179,6 +179,56 @@ describe("crypto page", () => {
     expect(render()).toContain('href="/api/crypto/BTC-USD"');
   });
 
+  test("shows multi-period performance, which is what the modal never had", () => {
+    const page = render({
+      performance: {
+        changes: [
+          { label: "24h", days: 1, percent: 1.5, from: 63300 },
+          { label: "7d", days: 7, percent: -4.25, from: 67000 },
+          { label: "1y", days: 365, percent: null, from: null },
+        ],
+        high52: 124720.32, low52: 58531.14,
+        high52At: "2026-01-04", low52At: "2026-06-02",
+        volumeQuote: 987654.3, barCount: 120,
+      },
+    });
+    expect(page).toContain("Performance");
+    expect(page).toContain("+1.50%");
+    expect(page).toContain("-4.25%");
+    expect(page).toContain("$124,720.32");
+    expect(page).toContain("2026-01-04");
+    // A period without enough history says why rather than showing a number.
+    expect(page).toContain("less history than it needs");
+    // And the absent fields are named, not silently dropped.
+    expect(page).toContain("Market capitalisation, circulating supply");
+  });
+
+  test("shows the order book, the other thing only the modal had", () => {
+    const page = render({
+      orderbook: {
+        symbol: "BTC/USD", timestamp: "2026-08-06T13:00:00Z",
+        bids: Array.from({ length: 12 }, (_, i) => ({ price: 64200 - i, size: 0.5 })),
+        asks: Array.from({ length: 12 }, (_, i) => ({ price: 64300 + i, size: 0.5 })),
+      },
+    });
+    expect(page).toContain("Order book");
+    expect(page).toContain("$64,200.00");
+    // Capped at 8 a side, as the modal was.
+    expect((page.match(/ob-row bid/g) ?? []).length).toBe(8);
+    expect((page.match(/ob-row ask/g) ?? []).length).toBe(8);
+    expect(page).toContain("as of page load, not live");
+  });
+
+  test("omits the order book entirely when the upstream gave none", () => {
+    // An empty two-column grid reads as "no liquidity", which is a claim.
+    expect(render({ orderbook: undefined })).not.toContain("Order book");
+  });
+
+  test("no longer points at the in-app modal", () => {
+    // That link led to a second, weaker view of the same pair.
+    expect(render()).not.toContain("/?pair=");
+  });
+
   test("a market failure degrades the page instead of replacing it", () => {
     const page = render({ marketError: "alpaca timeout" });
     expect(page).toContain("alpaca timeout");

@@ -159,8 +159,20 @@ in sitemaps, digest emails, and anywhere a report was already shared, so they
 keep resolving. Pair paths canonicalize too: `/crypto/btc` → `/crypto/BTC-USD`.
 
 The named data endpoints below answer JSON under **either** prefix; only the
-directory and a pair have a page form. The interactive candlestick view remains
-in the app, linked from each page (`/?pair=BTC-USD`).
+directory and a pair have a page form.
+
+**One surface per pair.** `/?pair=BTC-USD` used to open an in-app modal — a
+second, weaker view of the same pair, with no analysis and a URL nobody could
+share. It permanently redirects to `/crypto/BTC-USD` now, and the modal is
+gone. The page carries everything it had (order book included) plus the
+analysis and multi-period performance it never had.
+
+A pair page shows: price and spread, performance over 24h/7d/30d/90d/1y, the
+52-week range with dates, session volume in the quote currency, the analysis,
+the order book, and the technical indicators. Market capitalisation,
+circulating supply and all-time high are deliberately absent — Alpaca does not
+carry them, and deriving them would mean inventing a supply figure or mixing in
+a second vendor. The page says so rather than leaving a silent gap.
 
 | Endpoint | Returns |
 | --- | --- |
