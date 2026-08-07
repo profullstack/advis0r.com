@@ -25,6 +25,7 @@ import type { BarTimeframe, IndicatorConfig, MarketBar } from "../types.ts";
 import type { AlpacaCryptoClient } from "./client.ts";
 import { analyzeCrypto } from "./analysis.ts";
 import { computePerformance } from "./performance.ts";
+import type { CryptoFundamentalsClient } from "./fundamentals.ts";
 import { renderCryptoIndexPage, renderCryptoPage, renderMissingCryptoPage } from "./page.ts";
 import { SUPPORTED_PAIRS, getPair, lookupPairs, normalizePair, normalizePairs } from "./pairs.ts";
 
@@ -74,6 +75,8 @@ export interface CryptoRouteDeps {
   indicators: IndicatorConfig;
   /** Absolute site origin, for canonical URLs on the rendered pages. */
   appUrl: string;
+  /** Market cap / supply. Optional: the pages render without it. */
+  fundamentals?: CryptoFundamentalsClient;
 }
 
 /**
@@ -507,10 +510,12 @@ async function report(
   const pair = getPair(s.pair)!;
   const horizon = Number(url.searchParams.get("horizon")) === 1 ? 1 : 2;
 
-  // One round of upstream calls covers both halves of the report.
-  const [snapshots, computed] = await Promise.all([
+  // One round of upstream calls covers every part of the report. Fundamentals
+  // come from a different vendor and must not be able to fail the response.
+  const [snapshots, computed, funds] = await Promise.all([
     deps.client.getSnapshots([s.pair]),
     computeTechnicals(s.pair, horizon, deps),
+    deps.fundamentals ? deps.fundamentals.get(pair.base) : Promise.resolve(null),
   ]);
   const snap = snapshots[0];
 
@@ -524,6 +529,9 @@ async function report(
       snapshot: snap ? { ...snap, change: change(snap) } : undefined,
       technical: computed?.indicators,
       technicalScore: computed?.score,
+      // Sourced from CoinGecko, not the market-data feed — flagged so a
+      // consumer never has to guess which vendor a number came from.
+      fundamentals: funds ? { ...funds, source: "coingecko" } : null,
       caveats: computed?.caveats,
       generatedAt: new Date().toISOString(),
       disclaimer: CRYPTO_DISCLAIMER,
@@ -601,13 +609,16 @@ async function pairPage(raw: string, deps: CryptoRouteDeps): Promise<Response> {
     // Degrade to whatever we have rather than 502 the whole page.
     marketError = String(err).slice(0, 200);
   }
-  // The book is a nice-to-have: it must never take the page down with it, so
-  // it is fetched separately from the data the page is actually about.
-  try {
-    [orderbook] = await deps.client.getOrderbooks([symbol]);
-  } catch {
-    /* rendered without a book */
-  }
+  // Both of these are nice-to-haves from sources other than the page's own
+  // feed, so neither may take the page down with it. `get` already swallows
+  // its own failures; the book gets an explicit guard.
+  let fundamentals: Awaited<ReturnType<CryptoFundamentalsClient["get"]>> = null;
+  const [bookResult, fundamentalsResult] = await Promise.allSettled([
+    deps.client.getOrderbooks([symbol]),
+    deps.fundamentals ? deps.fundamentals.get(pair.base) : Promise.resolve(null),
+  ]);
+  if (bookResult.status === "fulfilled") [orderbook] = bookResult.value;
+  if (fundamentalsResult.status === "fulfilled") fundamentals = fundamentalsResult.value;
 
   const technical = bars.length >= 2 ? calculateIndicators(bars, deps.indicators) : undefined;
   const technicalScore = technical ? scoreTechnicalSetup(technical, 2) : undefined;
@@ -622,6 +633,7 @@ async function pairPage(raw: string, deps: CryptoRouteDeps): Promise<Response> {
         technicalScore,
         analysis: analyzeCrypto(pair.symbol, pair.name, technical, technicalScore),
         performance: computePerformance(bars),
+        fundamentals,
         orderbook,
         caveats: SCORE_CAVEATS,
         fetchedAt: new Date().toISOString(),

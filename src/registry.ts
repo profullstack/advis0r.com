@@ -4,6 +4,7 @@
 import type { AppConfig } from "./config.ts";
 import { AlpacaClient } from "./providers/alpaca.ts";
 import { AlpacaCryptoClient } from "./crypto/client.ts";
+import { CryptoFundamentalsClient } from "./crypto/fundamentals.ts";
 import { YahooMarketDataClient } from "./providers/yahoo.ts";
 import { FallbackMarketDataClient } from "./providers/market-fallback.ts";
 import { SecFundamentalsProvider } from "./providers/sec.ts";
@@ -47,6 +48,12 @@ export function buildRegistry(config: AppConfig) {
     maxRetries: config.alpaca.maxRetries,
   });
 
+  // Market cap and supply are the one crypto figure Alpaca does not carry, and
+  // they cannot be derived from a price without a supply number. This is the
+  // only non-Alpaca source on the crypto path; it is keyless like the rest, and
+  // the page degrades to "—" rather than failing when it is unreachable.
+  const cryptoFundamentals = new CryptoFundamentalsClient();
+
   // News is registered separately from `transcripts` rather than folded into
   // it: it requires tickers to be meaningful and can spend metered search
   // credits, so it runs only when explicitly asked for (`transcripts news`).
@@ -58,6 +65,7 @@ export function buildRegistry(config: AppConfig) {
   return {
     alpaca: market,
     crypto,
+    cryptoFundamentals,
     marketSource: hasAlpaca ? "alpaca (yahoo fallback)" : "yahoo",
     fundamentals: new SecFundamentalsProvider(config),
     transcripts: buildTranscriptProviders(config),

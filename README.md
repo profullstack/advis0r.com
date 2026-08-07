@@ -168,11 +168,35 @@ gone. The page carries everything it had (order book included) plus the
 analysis and multi-period performance it never had.
 
 A pair page shows: price and spread, performance over 24h/7d/30d/90d/1y, the
-52-week range with dates, session volume in the quote currency, the analysis,
-the order book, and the technical indicators. Market capitalisation,
-circulating supply and all-time high are deliberately absent — Alpaca does not
-carry them, and deriving them would mean inventing a supply figure or mixing in
-a second vendor. The page says so rather than leaving a silent gap.
+52-week range with dates, session volume in the quote currency, market cap and
+supply, the analysis, the order book, and the technical indicators.
+
+### The second data source
+
+Market capitalisation cannot be derived from a price without a circulating
+supply, and Alpaca's market-data API carries neither. So **CoinGecko** is the
+one non-Alpaca source on this path — keyless like the rest, cached for five
+minutes, one batched request covering every asset, and a page that degrades to
+"—" rather than failing when it is unreachable.
+
+Its figures are labelled as its own wherever they appear. They are market-wide
+and priced by CoinGecko; everything else on a crypto page is Alpaca's US venue.
+The 24h volume under *Supply & valuation* is aggregate market volume and is
+**not** comparable to the venue volume under *Performance* — conflating them
+would overstate liquidity by orders of magnitude.
+
+Two guards exist because CoinGecko keeps serving records for tokens that have
+moved on, and a plausible-looking number is worse than a blank:
+
+- **Non-positive supply** → not shown. `MKR` migrated to SKY and now reports
+  zero circulating supply against a live price; rendering "$0.00 market cap"
+  would be a false statement.
+- **Stale records** → not shown. `MATIC` migrated to POL and its record stopped
+  updating in February; a six-month-old supply figure beside a live price is
+  the same failure this codebase avoids everywhere else.
+
+In both cases the page names the reason rather than showing a dash that reads
+as a bug.
 
 | Endpoint | Returns |
 | --- | --- |
