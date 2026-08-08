@@ -479,6 +479,44 @@ bun test          # deterministic unit tests (indicators, parsing)
 bun run typecheck # tsc --noEmit
 ```
 
+## Security scanning
+
+Every pull request is scanned by ThreatCrush. Two workflows are involved and
+they do different jobs:
+
+- **`threatcrush-scan.yml`** reports findings and uploads SARIF to the Security
+  tab. It is managed by the sh1pt Actions Fleet and carries a content hash, so
+  do not edit it locally — a pack update will overwrite it.
+- **`security-gate.yml`** decides whether findings stop the merge.
+
+The gate is **"no new findings"**, not "no findings". ThreatCrush 0.3.0 has no
+ignore file and no inline suppression — the only control is `--fail-on
+<severity>`, and since every finding this repository currently produces is a
+reviewed false positive, turning that on would block every pull request and the
+gate would be switched off within a day.
+
+So the 56 triaged findings live in
+[`.github/threatcrush-baseline.json`](.github/threatcrush-baseline.json), each
+with a written justification saying why it is not exploitable. Anything **not**
+in that file fails CI. Introducing a real vulnerability therefore stops the
+merge; the known-clean findings do not.
+
+Findings are keyed by rule + file + a hash of the offending line, not by line
+number, so unrelated edits above them do not spuriously fail. The per-file count
+is checked too, so adding a second identical-looking sink to a file that already
+has one is still caught.
+
+To review and accept a new finding after establishing it is safe:
+
+```bash
+threatcrush scan . --format json --output scan.json
+.github/threatcrush-gate.py scan.json --update   # then write real justifications
+```
+
+Entries whose findings no longer fire are reported as removable, but do not fail
+the build — failing a pull request for *deleting* a finding would punish the
+change everyone wants people to make.
+
 ## Compliance
 
 Every ranking includes:
