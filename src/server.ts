@@ -820,6 +820,7 @@ const server = Bun.serve({
         indicators: INDICATOR_CONFIG,
         appUrl: config.appUrl,
         fundamentals: registry.cryptoFundamentals,
+        sparklines: registry.cryptoSparklines,
       });
       if (cryptoResponse) return cryptoResponse;
 

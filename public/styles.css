@@ -513,6 +513,25 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .cx-quote { font-family: var(--mono); font-size: 11px; color: var(--dim); }
 .cx-name { color: var(--dim); font-size: 11.5px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .cx-price { font-family: var(--mono); font-size: 21px; font-weight: 800; margin: 8px 0 4px; letter-spacing: -.01em; }
+
+/* Sparkline. Stretches to the card's width via preserveAspectRatio="none";
+   the stroke stays 1.5px because of vector-effect, so the horizontal scaling
+   does not smear the line. */
+.cx-spark { display: block; width: 100%; height: 28px; margin: 2px 0 6px; overflow: visible; }
+.cx-sparkchg { font-size: 11px; opacity: .85; }
+.cx-sparkchg.pos { color: var(--pos); }
+.cx-sparkchg.neg { color: var(--neg); }
+
+/* 24h / 7d toggle */
+.cx-period { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.cx-period button {
+  background: transparent; border: 0; color: var(--dim); cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600;
+  padding: 5px 12px; border-radius: 999px; transition: background .15s, color .15s;
+}
+.cx-period button:hover { color: var(--text); }
+.cx-period button.on { background: var(--accent); color: var(--bg); }
+.cx-period button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 1px; }
 .cx-sub { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; }
 .cx-spread { color: var(--dim); font-size: 11px; margin-left: auto; }
 .cx-dim { color: var(--dim); }

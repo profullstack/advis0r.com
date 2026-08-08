@@ -124,6 +124,25 @@ function respond(rawUrl: string): unknown {
       disclaimer: CRYPTO_DISCLAIMER,
     };
   }
+  if (p === "/crypto/sparklines") {
+    const period = url.searchParams.get("period") ?? "24h";
+    // BTC rises, ETH falls, and DOGE is deliberately absent so the "no history"
+    // path is exercised.
+    const rise = period === "7d" ? [100, 120, 140, 160] : [100, 101, 102, 103];
+    // ETH is down on the session in GRID_PRICES; its window rises, so the
+    // two directions disagree and the colour test can actually discriminate.
+    const fall = period === "7d" ? [140, 160, 180, 200] : [190, 195, 200];
+    const mk = (symbol: string, pts: number[]) => [symbol, {
+      symbol, points: pts, first: pts[0], last: pts.at(-1),
+      changePercent: ((pts.at(-1)! - pts[0]!) / pts[0]!) * 100,
+      start: "2026-08-05T00:00:00Z", end: "2026-08-06T00:00:00Z",
+    }];
+    return {
+      period,
+      series: Object.fromEntries([mk("BTC/USD", rise), mk("ETH/USD", fall)]),
+      disclaimer: CRYPTO_DISCLAIMER,
+    };
+  }
   if (p === "/crypto/lookup") {
     return {
       query: url.searchParams.get("q"),
@@ -231,6 +250,40 @@ describe("crypto tab", () => {
     expect(cards.every((c: any) => /^\/crypto\/[A-Z0-9]+-[A-Z]+$/.test(c.getAttribute("href")))).toBe(true);
   });
 
+  test("cards draw a sparkline when there is history for one", () => {
+    const svg = cardFor("BTC/USD")!.querySelector(".cx-spark");
+    expect(svg).toBeTruthy();
+    // Two paths: the filled area and the line itself.
+    expect(svg!.querySelectorAll("path").length).toBe(2);
+    expect(svg!.getAttribute("preserveAspectRatio")).toBe("none");
+    // Decorative: the numbers beside it carry the meaning.
+    expect(svg!.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  test("a pair with no series renders without a chart rather than a flat line", () => {
+    // DOGE is absent from the sparkline fixture but present in prices.
+    const doge = cardFor("DOGE/USD")!;
+    expect(doge.querySelector(".cx-spark")).toBeNull();
+    // The card is still a card: price and link intact.
+    expect(doge.querySelector(".cx-price")!.textContent).toBe("$0.06893");
+    expect(doge.getAttribute("href")).toBe("/crypto/DOGE-USD");
+  });
+
+  test("the summary says how many pairs lack history", () => {
+    // Silence would read as a rendering bug rather than missing data.
+    expect(text("#cx-summary")).toContain("without 24h history");
+  });
+
+  test("the sparkline is coloured by its own period, not the session", () => {
+    // ETH is DOWN on the session but UP across the sparkline window. Painting
+    // the line red because the day was red would misreport the window.
+    const eth = cardFor("ETH/USD")!;
+    expect(eth.classList.contains("negative")).toBe(true); // session direction
+    const stroke = eth.querySelector(".cx-spark path:last-of-type")!.getAttribute("stroke");
+    expect(stroke).toBe("var(--pos)"); // window direction
+    expect(eth.querySelector(".cx-sparkchg")!.textContent).toContain("+5.3%");
+  });
+
   test("prices keep precision across four orders of magnitude", () => {
     const priceOf = (pair: string) => cardFor(pair)?.querySelector(".cx-price")?.textContent;
     // The bug this guards: a fixed 2dp renders DOGE as "$0.00".
@@ -253,6 +306,27 @@ describe("crypto tab", () => {
     // A card showing "—" for every field is worse than no card.
     const cards = $$(".cxcard");
     for (const c of cards) expect(c.querySelector(".cx-price").textContent).not.toBe("—");
+  });
+});
+
+describe("sparkline period toggle", () => {
+  test("defaults to 24h and marks it active", () => {
+    const on = $$(".cx-period button").filter((b: any) => b.classList.contains("on"));
+    expect(on).toHaveLength(1);
+    expect(on[0].dataset.period).toBe("24h");
+  });
+
+  test("switching to 7d redraws the cards from the 7d series", async () => {
+    const before = cardFor("BTC/USD")!.querySelector(".cx-sparkchg")!.textContent;
+    expect(before).toContain("+3.0%");
+
+    click($$(".cx-period button").find((b: any) => b.dataset.period === "7d"));
+    await sleep(300);
+
+    const after = cardFor("BTC/USD")!.querySelector(".cx-sparkchg")!.textContent;
+    expect(after).toContain("+60.0%");
+    expect($$(".cx-period button").find((b: any) => b.dataset.period === "7d")!.classList.contains("on")).toBe(true);
+    expect(text("#cx-summary")).toContain("without 7d history");
   });
 });
 

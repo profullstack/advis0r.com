@@ -25,6 +25,7 @@ import type { BarTimeframe, IndicatorConfig, MarketBar } from "../types.ts";
 import type { AlpacaCryptoClient } from "./client.ts";
 import { analyzeCrypto } from "./analysis.ts";
 import { computePerformance } from "./performance.ts";
+import { SPARK_PERIODS, SparklineService, isSparkPeriod } from "./sparkline.ts";
 import type { CryptoFundamentalsClient } from "./fundamentals.ts";
 import { renderCryptoIndexPage, renderCryptoPage, renderMissingCryptoPage } from "./page.ts";
 import { SUPPORTED_PAIRS, getPair, lookupPairs, normalizePair, normalizePairs } from "./pairs.ts";
@@ -68,6 +69,7 @@ const RESERVED = new Set([
   "orderbooks",
   "technicals",
   "report",
+  "sparklines",
 ]);
 
 export interface CryptoRouteDeps {
@@ -77,6 +79,8 @@ export interface CryptoRouteDeps {
   appUrl: string;
   /** Market cap / supply. Optional: the pages render without it. */
   fundamentals?: CryptoFundamentalsClient;
+  /** Compact price series for the grid cards. Optional. */
+  sparklines?: SparklineService;
 }
 
 /**
@@ -120,6 +124,8 @@ export async function handleCryptoRoute(
         return await orderbook(url, deps);
       case "technicals":
         return await technicals(url, deps);
+      case "sparklines":
+        return await sparklineRoute(url, deps);
       case "report":
         return await report(url.searchParams.get("symbol"), url, deps);
     }
@@ -222,6 +228,8 @@ function index(deps: CryptoRouteDeps): Response {
         "GET /crypto/bars?symbol=&timeframe=&start=&end=&limit=":
           `historical OHLCV; timeframe one of ${VALID_TIMEFRAMES.join(", ")}`,
         "GET /crypto/orderbook?symbol=&depth=": "top of book, both sides",
+        "GET /crypto/sparklines?symbols=&period=24h|7d":
+          "compact close-price series for drawing sparklines",
         "GET /crypto/technicals?symbol=&horizon=1|2":
           "locally computed SMA/EMA/RSI/MACD/Bollinger/ATR + technical score",
         "GET /crypto/report?symbol=": "snapshot + technicals + score in one call",
@@ -482,6 +490,44 @@ async function orderbook(url: URL, deps: CryptoRouteDeps): Promise<Response> {
     200,
     // The book moves constantly — never serve a stale one from cache.
     0,
+  );
+}
+
+/**
+ * Compact close-price series, one per pair, for the grid cards.
+ *
+ * Deliberately not a variant of /crypto/bars: that returns full OHLCV and
+ * paginates, and twelve cards do not need thousands of bar objects to draw
+ * twelve lines a couple of hundred pixels wide.
+ */
+async function sparklineRoute(url: URL, deps: CryptoRouteDeps): Promise<Response> {
+  if (!deps.sparklines) return json({ error: "sparklines unavailable" }, 503);
+  const b = basket(url);
+  if ("error" in b) return b.error;
+
+  const requested = url.searchParams.get("period") ?? "24h";
+  if (!isSparkPeriod(requested)) {
+    return json({ error: `invalid period "${requested}"`, valid: SPARK_PERIODS }, 400);
+  }
+
+  const series = await deps.sparklines.get(b.pairs, requested);
+  return json(
+    {
+      period: requested,
+      // Only pairs with a drawable line appear. A card omits its chart rather
+      // than drawing a flat line from a single observation.
+      series: Object.fromEntries(
+        b.pairs.flatMap((symbol) => {
+          const s = series.get(symbol);
+          return s ? [[symbol, s] as const] : [];
+        }),
+      ),
+      ...rejectedNote(b.rejected),
+      disclaimer: CRYPTO_DISCLAIMER,
+    },
+    200,
+    // Matches the service's own cache, so an edge hit and a process hit agree.
+    requested === "24h" ? 60 : 300,
   );
 }
 
