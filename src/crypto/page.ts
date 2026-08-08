@@ -16,6 +16,7 @@ import { escapeHtml, escapeXml } from "../util/html.ts";
 import { absoluteTime, num, score, shell, sparkline } from "../reports/page.ts";
 import type { CryptoAnalysis } from "./analysis.ts";
 import type { CryptoOrderbook, CryptoSnapshot } from "./client.ts";
+import type { AssetFundamentals } from "./fundamentals.ts";
 import type { CryptoPerformance } from "./performance.ts";
 import type { CryptoPair } from "./pairs.ts";
 import type { MarketBar, TechnicalIndicatorSet, TechnicalScore } from "../types.ts";
@@ -50,6 +51,8 @@ export interface CryptoPageData {
   technicalScore?: TechnicalScore;
   analysis: CryptoAnalysis | null;
   performance?: CryptoPerformance;
+  /** Market cap / supply / ATH. Null when the second source was unreachable. */
+  fundamentals?: AssetFundamentals | null;
   /** Top of book, when the upstream returned one. */
   orderbook?: CryptoOrderbook;
   caveats: readonly string[];
@@ -64,6 +67,71 @@ export interface CryptoPageOptions {
 }
 
 const signed = (n: number, dp = 2) => `${n >= 0 ? "+" : ""}${n.toFixed(dp)}%`;
+
+/** Compact currency for figures in the billions. */
+function bigMoney(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const a = Math.abs(n);
+  if (a >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+  if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  return cryptoMoney(n);
+}
+
+/** Supply counts are token units, not currency. */
+function tokens(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const a = Math.abs(n);
+  if (a >= 1e12) return `${(n / 1e12).toFixed(2)}T`;
+  if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+/**
+ * Market cap, supply and all-time high — the one section sourced from
+ * CoinGecko rather than Alpaca, and labelled as such. Everything else on the
+ * page is venue data; presenting these together unattributed would imply a
+ * single source of truth that does not exist.
+ */
+function fundamentalsSection(f: AssetFundamentals | null, base: string): string {
+  if (!f) {
+    return `<section class="rp-section">
+      <h2>Supply &amp; valuation</h2>
+      <p class="rp-note">Unavailable right now — this is the one figure set that does not come from the market-data feed, and its source could not be reached. Nothing is estimated in the meantime.</p>
+    </section>`;
+  }
+  if (f.unavailableReason) {
+    // Naming the reason matters: "—" alone reads as a bug, when the truth is
+    // that the asset itself has moved on.
+    return `<section class="rp-section">
+      <h2>Supply &amp; valuation</h2>
+      <p class="rp-note">Not shown for ${e(base)}: ${e(f.unavailableReason)}. A market capitalisation cannot be computed without a circulating supply, and estimating one would be a guess presented as a fact.</p>
+    </section>`;
+  }
+
+  const pctFromAth = f.athChangePercent != null ? signed(f.athChangePercent) : "—";
+  return `<section class="rp-section">
+    <h2>Supply &amp; valuation <span class="rp-badge conservative">CoinGecko</span></h2>
+    <dl class="rp-grid">
+      ${kv("Market cap", bigMoney(f.marketCap))}
+      ${kv("Rank", f.marketCapRank != null ? `#${f.marketCapRank}` : "—")}
+      ${kv("Fully diluted", bigMoney(f.fullyDilutedValuation))}
+      ${kv("Circulating supply", `${tokens(f.circulatingSupply)} ${e(base)}`)}
+      ${kv("Total supply", `${tokens(f.totalSupply)} ${e(base)}`)}
+      ${kv("Max supply", f.maxSupply == null ? "uncapped" : `${tokens(f.maxSupply)} ${e(base)}`)}
+      ${kv("All-time high", `${cryptoMoney(f.ath)}${f.athDate ? ` <span class="rp-when">${e(String(f.athDate).slice(0, 10))}</span>` : ""}`)}
+      ${kv("From ATH", pctFromAth, f.athChangePercent != null && f.athChangePercent < 0 ? "neg" : "")}
+      ${kv("24h volume (all venues)", bigMoney(f.volume24h))}
+    </dl>
+    <p class="rp-note">
+      Source: CoinGecko${f.lastUpdated ? `, as of ${e(absoluteTime(f.lastUpdated))}` : ""}. These are
+      market-wide figures priced by CoinGecko; every other number on this page comes from Alpaca's US
+      venue. In particular the 24h volume above is aggregate market volume, which is a much larger
+      quantity than the venue volume shown under Performance — they are not comparable.
+    </p>
+  </section>`;
+}
 
 /** Multi-period performance — what the pair has been doing, not just its spread. */
 function performanceSection(p: CryptoPerformance | undefined, quote: string): string {
@@ -88,7 +156,7 @@ function performanceSection(p: CryptoPerformance | undefined, quote: string): st
       ${kv("Daily bars", String(p.barCount))}
     </dl>
     ${thin ? `<p class="rp-note">A period showing “—” has less history than it needs. Measuring it from the oldest bar available would report a change over a window that does not exist.</p>` : ""}
-    <p class="rp-note">Market capitalisation, circulating supply and all-time high are not shown: Alpaca's market-data API does not carry them, and deriving them would mean inventing a supply figure or mixing in a second vendor.</p>
+    <p class="rp-note">Prices and volume in this section are Alpaca's US venue. Market-wide figures are under Supply &amp; valuation below.</p>
   </section>`;
 }
 
@@ -195,6 +263,8 @@ export function renderCryptoPage(data: CryptoPageData, opts: CryptoPageOptions):
   </section>
 
   ${performanceSection(data.performance, pair.quote)}
+
+  ${fundamentalsSection(data.fundamentals ?? null, pair.base)}
 
   ${analysisSection(analysis)}
 

@@ -199,8 +199,10 @@ describe("crypto page", () => {
     expect(page).toContain("2026-01-04");
     // A period without enough history says why rather than showing a number.
     expect(page).toContain("less history than it needs");
-    // And the absent fields are named, not silently dropped.
-    expect(page).toContain("Market capitalisation, circulating supply");
+    // Venue figures must be labelled as such, now that market-wide ones share
+    // the page — the two are easy to mistake for each other.
+    expect(page).toContain("Alpaca's US venue");
+    expect(page).toContain("Supply &amp; valuation");
   });
 
   test("shows the order book, the other thing only the modal had", () => {
@@ -222,6 +224,67 @@ describe("crypto page", () => {
   test("omits the order book entirely when the upstream gave none", () => {
     // An empty two-column grid reads as "no liquidity", which is a claim.
     expect(render({ orderbook: undefined })).not.toContain("Order book");
+  });
+
+  test("shows market cap and supply, attributed to its own source", () => {
+    const page = render({
+      fundamentals: {
+        base: "BTC", coingeckoId: "bitcoin",
+        marketCap: 1_292_252_659_205, marketCapRank: 1,
+        fullyDilutedValuation: 1_292_252_659_205,
+        circulatingSupply: 20_066_703, totalSupply: 20_066_721, maxSupply: 21_000_000,
+        ath: 126_080, athDate: "2025-10-06T10:57:42.000Z", athChangePercent: -48.92,
+        volume24h: 18_396_856_097, lastUpdated: "2026-08-06T13:00:00.000Z",
+      },
+    });
+    expect(page).toContain("Supply &amp; valuation");
+    expect(page).toContain("$1.29T"); // market cap
+    expect(page).toContain("#1"); // rank
+    expect(page).toContain("20.07M BTC"); // circulating supply
+    expect(page).toContain("21.00M BTC"); // max supply
+    expect(page).toContain("$126,080.00"); // ATH
+    expect(page).toContain("2025-10-06");
+    expect(page).toContain("-48.92%");
+    // Provenance: the reader must never have to guess which vendor a number
+    // came from when two are on one page.
+    expect(page).toContain("CoinGecko");
+    expect(page).toContain("not comparable");
+  });
+
+  test("an uncapped supply says so rather than showing a dash", () => {
+    const page = render({
+      fundamentals: {
+        base: "ETH", coingeckoId: "ethereum", marketCap: 2e11, marketCapRank: 2,
+        fullyDilutedValuation: null, circulatingSupply: 1.2e8, totalSupply: 1.2e8,
+        maxSupply: null, ath: 4800, athDate: null, athChangePercent: null,
+        volume24h: 1e10, lastUpdated: null,
+      },
+    });
+    expect(page).toContain("uncapped");
+  });
+
+  test("a migrated token explains itself instead of showing $0.00", () => {
+    // The MKR/MATIC case. "$0.00 market cap" would be a false statement.
+    const page = render({
+      fundamentals: {
+        base: "MKR", coingeckoId: "maker", marketCap: null, marketCapRank: null,
+        fullyDilutedValuation: null, circulatingSupply: null, totalSupply: null,
+        maxSupply: null, ath: null, athDate: null, athChangePercent: null,
+        volume24h: null, lastUpdated: "2026-08-06T13:00:00.000Z",
+        unavailableReason: "the upstream reports no circulating supply for this asset, which usually means it has migrated to a successor token",
+      },
+    });
+    expect(page).toContain("Supply &amp; valuation");
+    expect(page).toContain("migrated to a successor token");
+    expect(page).not.toContain("$0.00");
+    expect(page).not.toContain("$NaN");
+  });
+
+  test("an unreachable source says so rather than implying zero", () => {
+    const page = render({ fundamentals: null });
+    expect(page).toContain("Supply &amp; valuation");
+    expect(page).toContain("could not be reached");
+    expect(page).toContain("Nothing is estimated");
   });
 
   test("no longer points at the in-app modal", () => {
