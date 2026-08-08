@@ -5,12 +5,32 @@
 # be overwritten on the next pack update. It reports findings; this decides
 # whether they stop the merge.
 #
-# The decision is "no NEW findings" rather than "no findings". ThreatCrush 0.3.0
-# has no ignore file and no inline suppression, and every finding this
-# repository currently produces is a reviewed false positive — so `--fail-on`
-# would block every pull request and be switched off within a day. Instead the
-# 56 triaged findings live in threatcrush-baseline.json with written
-# justifications, and anything not in that file fails here.
+# This started out as a reviewed-baseline gate, because ThreatCrush 0.3.0
+# reported 56 findings here and all 56 were false positives — six of them
+# high-severity, so `--fail-on high` would have blocked every pull request.
+# Those were rule bugs rather than anything in this repository, and they are
+# fixed in 0.4.0 (profullstack/threatcrush#76): static `innerHTML` assignments,
+# short escaper aliases like `esc()`, `searchParams.set` counted as untrusted
+# input, and test fixtures read as live credentials. This repository now has
+# zero high-severity findings, so the plain gate does the job and ~200 lines of
+# baseline machinery went away with it.
+#
+# The remaining findings are medium and deliberately do not block: they are
+# `innerHTML` sinks in multi-line templates whose interpolations are escaped on
+# a different line than the assignment, which a line-oriented scanner cannot
+# see.
+#
+# Know what this does not catch. Severity depends on whether the scanner can
+# see the taint source near the sink, so the same XSS is rated differently
+# depending on how the code is arranged:
+#
+#     innerHTML = '<b>' + new URL(location).searchParams.get('q') + '</b>'  high, blocks
+#     innerHTML = '<b>' + q + '</b>'   // q is a parameter                  medium, does not
+#
+# Both were measured. The gate therefore catches a vulnerability written in
+# one place and misses one whose source sits in another function. Raising it to
+# `--fail-on medium` would close that gap and currently costs 31 false
+# positives; the honest position is that this gate is a floor, not a proof.
 name: security gate
 
 on:
@@ -23,7 +43,7 @@ permissions:
 
 jobs:
   gate:
-    name: no unreviewed findings
+    name: no high-severity findings
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -49,17 +69,31 @@ jobs:
           echo "::error::ThreatCrush install failed after 3 attempts"
           exit 1
 
-      - name: Scan
+      - name: Record the version that ran
+        run: threatcrush --version
+
+      # Fails closed in both directions. `--fail-on high` exits 1 when a
+      # high-or-critical finding exists; any other non-zero exit is a scan that
+      # did not complete, and an unexamined diff is not a clean one — so the
+      # step fails either way rather than treating "no output" as "no findings".
+      - name: Gate on high-severity findings
         run: |
           set -o pipefail
-          # Deliberately no --fail-on: the gate below decides, and it needs the
-          # findings file to exist regardless of what was found.
-          threatcrush scan . --format json --output threatcrush.json || true
+          code=0
+          threatcrush scan . --fail-on high --format json --output threatcrush.json || code=$?
 
-      # Fails closed. An unreadable or absent findings file is not a clean
-      # scan, and the gate says so rather than passing by default.
-      - name: Gate on unreviewed findings
-        run: python3 .github/threatcrush-gate.py threatcrush.json
+          if [ ! -s threatcrush.json ]; then
+            echo "::error::ThreatCrush produced no findings file (exit ${code}) — this diff was NOT scanned"
+            exit 1
+          fi
+
+          total=$(python3 -c "import json;d=json.load(open('threatcrush.json'));print(len(d['findings'] if isinstance(d,dict) else d))")
+          echo "ThreatCrush: ${total} finding(s), exit ${code}." >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$code" -ne 0 ]; then
+            echo "::error::high-severity finding(s) present — see the Security tab or the artifact below"
+            exit "$code"
+          fi
 
       - name: Upload findings
         if: always()
