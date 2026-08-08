@@ -487,35 +487,61 @@ they do different jobs:
 - **`threatcrush-scan.yml`** reports findings and uploads SARIF to the Security
   tab. It is managed by the sh1pt Actions Fleet and carries a content hash, so
   do not edit it locally — a pack update will overwrite it.
-- **`security-gate.yml`** decides whether findings stop the merge.
+- **`security-gate.yml`** decides whether findings stop the merge. It runs
+  `threatcrush scan . --fail-on high`, so a high-or-critical finding fails the
+  build.
 
-The gate is **"no new findings"**, not "no findings". ThreatCrush 0.3.0 has no
-ignore file and no inline suppression — the only control is `--fail-on
-<severity>`, and since every finding this repository currently produces is a
-reviewed false positive, turning that on would block every pull request and the
-gate would be switched off within a day.
+It fails closed in both directions: a scan that produces no findings file is
+reported as *not scanned* rather than as clean, because an unexamined diff is
+not a clean one.
 
-So the 56 triaged findings live in
-[`.github/threatcrush-baseline.json`](.github/threatcrush-baseline.json), each
-with a written justification saying why it is not exploitable. Anything **not**
-in that file fails CI. Introducing a real vulnerability therefore stops the
-merge; the known-clean findings do not.
+### Why the gate is `high` and not `medium`
 
-Findings are keyed by rule + file + a hash of the offending line, not by line
-number, so unrelated edits above them do not spuriously fail. The per-file count
-is checked too, so adding a second identical-looking sink to a file that already
-has one is still caught.
+The scan reported **56 findings here, all 56 false positives**, six of them
+high-severity — which made any `--fail-on` setting unusable, since it would
+have blocked every pull request. Triaging them showed the fault was in the
+rules rather than in this repository, and the fixes shipped in ThreatCrush
+0.4.0 ([threatcrush#76](https://github.com/profullstack/threatcrush/pull/76)):
 
-To review and accept a new finding after establishing it is safe:
+- static `innerHTML` assignments reported as XSS
+- the escaper guard matching `escapeHtml(` but not `esc(`, so the code that
+  escapes most rigorously was reported most often
+- `searchParams` counted as untrusted input even when *writing* an outbound
+  URL, which fired the SSRF rule on constant hosts
+- credentials in test fixtures treated as live
 
-```bash
-threatcrush scan . --format json --output scan.json
-.github/threatcrush-gate.py scan.json --update   # then write real justifications
+That took this repository to **zero high-severity findings**, so the plain gate
+now works and the reviewed-baseline machinery it replaced (~200 lines) is gone.
+
+The findings that remain are medium and deliberately do not block. They are
+`innerHTML` sinks inside multi-line templates whose interpolations *are*
+escaped, just on a different line from the assignment — which a line-oriented
+scanner cannot see.
+
+### What this gate does not catch
+
+Severity depends on whether the scanner can see the taint source near the sink,
+so the *same* vulnerability is rated differently depending on how the code is
+arranged. Both of these were measured against this repository:
+
+| shape | severity | blocks? |
+| --- | --- | --- |
+| `innerHTML = '<b>' + new URL(location).searchParams.get('q') + '</b>'` | high | yes |
+| `innerHTML = '<b>' + q + '</b>'`, where `q` is a parameter | medium | **no** |
+
+So the gate stops a vulnerability written in one place and misses one whose
+source sits in another function. `--fail-on medium` would close the gap and
+today costs 31 false positives, which is why it is not set. Treat this as a
+floor, not a proof — it is not a substitute for review.
+
+To silence a finding you have established is safe, use the scanner's own
+directive on the line above it, with the rule named so a *different* rule
+firing there still surfaces:
+
+```js
+// threatcrush-disable-next-line js-unescaped-html-sink
+el.innerHTML = template;
 ```
-
-Entries whose findings no longer fire are reported as removable, but do not fail
-the build — failing a pull request for *deleting* a finding would punish the
-change everyone wants people to make.
 
 ## Compliance
 
