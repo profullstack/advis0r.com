@@ -1,0 +1,71 @@
+# Blocking security gate.
+#
+# Separate from threatcrush-scan.yml on purpose: that file is managed by the
+# sh1pt Actions Fleet and carries a content hash, so local edits are liable to
+# be overwritten on the next pack update. It reports findings; this decides
+# whether they stop the merge.
+#
+# The decision is "no NEW findings" rather than "no findings". ThreatCrush 0.3.0
+# has no ignore file and no inline suppression, and every finding this
+# repository currently produces is a reviewed false positive — so `--fail-on`
+# would block every pull request and be switched off within a day. Instead the
+# 56 triaged findings live in threatcrush-baseline.json with written
+# justifications, and anything not in that file fails here.
+name: security gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: no unreviewed findings
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Same retry shape as the scan workflow: a registry blip is not a
+      # security signal and must not read like one.
+      - name: Install ThreatCrush
+        run: |
+          for attempt in 1 2 3; do
+            if npm install -g "@profullstack/threatcrush@latest"; then
+              exit 0
+            fi
+            delay=$((attempt * 10))
+            echo "::warning::ThreatCrush install attempt ${attempt}/3 failed; retrying in ${delay}s"
+            sleep "${delay}"
+          done
+          echo "::error::ThreatCrush install failed after 3 attempts"
+          exit 1
+
+      - name: Scan
+        run: |
+          set -o pipefail
+          # Deliberately no --fail-on: the gate below decides, and it needs the
+          # findings file to exist regardless of what was found.
+          threatcrush scan . --format json --output threatcrush.json || true
+
+      # Fails closed. An unreadable or absent findings file is not a clean
+      # scan, and the gate says so rather than passing by default.
+      - name: Gate on unreviewed findings
+        run: python3 .github/threatcrush-gate.py threatcrush.json
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: threatcrush-findings
+          path: threatcrush.json
+          retention-days: 30
+          if-no-files-found: warn
