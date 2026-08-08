@@ -1493,6 +1493,17 @@ const CRYPTO_GRID_PAIRS = [
 ];
 
 const CRYPTO_REFRESH_MS = 30_000;
+
+/** Sparkline window shown on the cards. Persisted so it survives a reload. */
+let cryptoSparkPeriod = (() => {
+  try {
+    const saved = localStorage.getItem("cx-spark-period");
+    return saved === "7d" || saved === "24h" ? saved : "24h";
+  } catch {
+    // Private mode and blocked storage both throw; the default is fine.
+    return "24h";
+  }
+})();
 let cryptoTimer = null;
 let cryptoLoading = false;
 
@@ -1510,7 +1521,33 @@ function fmtPrice(n) {
   return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
 }
 
-function cryptoCard(s) {
+/**
+ * Inline SVG sparkline for a card. Returns "" for fewer than two points rather
+ * than drawing a flat line, which would imply a price we never observed.
+ *
+ * viewBox coordinates with preserveAspectRatio="none" so one path stretches to
+ * whatever width the card ends up — no measuring, no redraw on resize.
+ */
+function cryptoSparkSvg(points, rising) {
+  if (!Array.isArray(points) || points.length < 2) return "";
+  const w = 100;
+  const h = 28;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  // A perfectly flat series has no range to scale against; draw it mid-height.
+  const span = max - min || 1;
+  const x = (i) => (i / (points.length - 1)) * w;
+  const y = (v) => h - 1 - ((v - min) / span) * (h - 2);
+  const line = points.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const stroke = rising ? "var(--pos)" : "var(--neg)";
+  return `<svg class="cx-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+    <path d="${line}L${w},${h}L0,${h}Z" fill="${stroke}" fill-opacity=".12"/>
+    <path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.5"
+          vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function cryptoCard(s, spark) {
   const chg = s.change;
   const dir = chg == null ? "" : chg.percent >= 0 ? "positive" : "negative";
   const price = s.latestTrade?.price ?? s.dailyBar?.close;
@@ -1518,6 +1555,10 @@ function cryptoCard(s) {
   const spreadBps = q && q.askPrice && q.bidPrice
     ? ((q.askPrice - q.bidPrice) / ((q.askPrice + q.bidPrice) / 2)) * 10000
     : null;
+  // The sparkline is coloured by its OWN period's direction, which is not
+  // always the session's: a pair can be down today inside a rising week, and
+  // painting the 7d line red because the day was red would misreport it.
+  const sparkRising = spark?.changePercent == null ? chg == null || chg.percent >= 0 : spark.changePercent >= 0;
   // An anchor, not a button: this has to be shareable, middle-clickable and
   // crawlable. The destination renders server-side, so it works before this
   // script has run at all.
@@ -1528,9 +1569,13 @@ function cryptoCard(s) {
       <span class="cx-name">${esc(s.name || "")}</span>
     </div>
     <div class="cx-price">${fmtPrice(price)}</div>
+    ${cryptoSparkSvg(spark?.points, sparkRising)}
     <div class="cx-sub">
       ${chg == null ? '<span class="cx-dim">—</span>'
         : `<span class="sig-dir ${dir}">${chg.percent >= 0 ? "+" : ""}${chg.percent.toFixed(2)}%</span>`}
+      ${spark?.changePercent != null
+        ? `<span class="cx-sparkchg ${spark.changePercent >= 0 ? "pos" : "neg"}" title="Change over the selected period">${spark.changePercent >= 0 ? "+" : ""}${spark.changePercent.toFixed(1)}%</span>`
+        : ""}
       ${spreadBps != null ? `<span class="cx-spread" title="Bid/ask spread">${spreadBps.toFixed(1)} bps</span>` : ""}
     </div>
   </a>`;
@@ -1544,15 +1589,28 @@ async function loadCryptoGrid() {
   const summary = $("#cx-summary");
   if (!grid) { cryptoLoading = false; return; }
   if (!grid.dataset.loaded) grid.innerHTML = `<div class="spinner"></div>`;
+  const symbols = encodeURIComponent(CRYPTO_GRID_PAIRS.join(","));
   try {
-    const d = await api(`/crypto/snapshot?symbols=${encodeURIComponent(CRYPTO_GRID_PAIRS.join(","))}`);
+    // Prices are the point of the grid; the sparklines are decoration on top.
+    // Fetched together, but the chart request is allowed to fail on its own —
+    // losing the lines is not a reason to lose the prices.
+    const [d, sparkRes] = await Promise.all([
+      api(`/crypto/snapshot?symbols=${symbols}`),
+      api(`/crypto/sparklines?symbols=${symbols}&period=${cryptoSparkPeriod}`).catch(() => null),
+    ]);
+    const series = sparkRes?.series ?? {};
     const rows = (d.snapshots || []).filter((s) => s.latestTrade || s.dailyBar);
     grid.innerHTML = rows.length
-      ? rows.map(cryptoCard).join("")
+      ? rows.map((s) => cryptoCard(s, series[s.symbol])).join("")
       : `<p class="empty">No crypto prices available right now.</p>`;
     grid.dataset.loaded = "1";
     if (summary) {
-      summary.textContent = `${rows.length} pairs · Alpaca US crypto venue · updated ${new Date().toLocaleTimeString()}`;
+      const charted = rows.filter((s) => series[s.symbol]).length;
+      summary.textContent =
+        `${rows.length} pairs · Alpaca US crypto venue · updated ${new Date().toLocaleTimeString()}` +
+        // Say when the lines are missing rather than leaving bare cards that
+        // read as a rendering bug.
+        (charted === rows.length ? "" : ` · ${rows.length - charted} without ${cryptoSparkPeriod} history`);
     }
   } catch (e) {
     // Never blank an already-painted grid on a refresh failure — a transient
@@ -1591,3 +1649,28 @@ attachLookup(
 
 $("#cx-refresh")?.addEventListener("click", loadCryptoGrid);
 $("#cx-auto")?.addEventListener("change", (e) => setCryptoAuto(e.target.checked));
+
+/** Reflect the active sparkline window in the toggle. */
+function paintCryptoPeriod() {
+  $$("#cx-period-group button, .cx-period button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.period === cryptoSparkPeriod),
+  );
+}
+
+$(".cx-period")?.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-period]");
+  if (!b || b.dataset.period === cryptoSparkPeriod) return;
+  cryptoSparkPeriod = b.dataset.period;
+  try {
+    localStorage.setItem("cx-spark-period", cryptoSparkPeriod);
+  } catch {
+    /* not worth failing the interaction over */
+  }
+  paintCryptoPeriod();
+  // Force a repaint even though prices have not changed: the cached grid was
+  // drawn for the other window.
+  const grid = $("#cx-grid");
+  if (grid) delete grid.dataset.loaded;
+  loadCryptoGrid();
+});
+paintCryptoPeriod();

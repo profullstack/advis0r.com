@@ -136,9 +136,18 @@ signed when the keys are present and unsigned when they are not. That is why
 there is no Yahoo-style fallback on this path — the primary source degrades to
 itself rather than to a second vendor with different provenance.
 
-In the web dashboard this is the **Crypto** tab: a live grid of the majors, a
-name-or-symbol picker, and an opt-in 30s auto-refresh that only ticks while that
-tab is actually on screen. Prices are fetched when the tab is first opened
+In the web dashboard this is the **Crypto** tab: a live grid of the majors with
+24h/7d sparklines, a name-or-symbol picker, and an opt-in 30s auto-refresh that
+only ticks while that tab is actually on screen.
+
+The sparklines have their own endpoint rather than reusing `/crypto/bars`:
+twelve cards do not need thousands of OHLCV objects to draw twelve lines a
+couple of hundred pixels wide, and Alpaca'''s multi-symbol bars endpoint
+paginates, so one grid load is several upstream requests. The series is
+downsampled server-side (24 points for 24h, 56 for 7d) and cached as a unit, so
+a whole grid costs one set of requests per minute rather than one per visitor —
+14KB on the wire for all twelve. A pair without enough history is drawn without
+a line rather than as a flat one, and the summary says how many those were. Prices are fetched when the tab is first opened
 rather than on boot, so a visitor who never looks at it costs no upstream calls.
 
 ### Pages vs JSON
@@ -207,6 +216,7 @@ as a bug.
 | `GET /crypto/quote?symbol=BTC/USD` | latest trade/quote with spread and spread in basis points |
 | `GET /crypto/bars?symbol=&timeframe=&start=&end=&limit=` | historical OHLCV (`1Min`…`1Week`) |
 | `GET /crypto/orderbook?symbol=&depth=` | top of book, both sides |
+| `GET /crypto/sparklines?symbols=&period=24h|7d` | compact close-price series for the grid cards |
 | `GET /crypto/technicals?symbol=&horizon=1\|2` | locally computed indicators + technical score |
 | `GET /crypto/report?symbol=` | snapshot + technicals + score in one call |
 | `GET /crypto/<PAIR>` | the same report by path, e.g. `/crypto/BTC-USD` |

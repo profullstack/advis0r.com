@@ -5,6 +5,7 @@ import type { AppConfig } from "./config.ts";
 import { AlpacaClient } from "./providers/alpaca.ts";
 import { AlpacaCryptoClient } from "./crypto/client.ts";
 import { CryptoFundamentalsClient } from "./crypto/fundamentals.ts";
+import { SparklineService } from "./crypto/sparkline.ts";
 import { YahooMarketDataClient } from "./providers/yahoo.ts";
 import { FallbackMarketDataClient } from "./providers/market-fallback.ts";
 import { SecFundamentalsProvider } from "./providers/sec.ts";
@@ -54,6 +55,10 @@ export function buildRegistry(config: AppConfig) {
   // the page degrades to "—" rather than failing when it is unreachable.
   const cryptoFundamentals = new CryptoFundamentalsClient();
 
+  // Grid sparklines. Cached as a unit so twelve cards cost one set of
+  // paginated upstream requests per minute, not one set per visitor.
+  const cryptoSparklines = new SparklineService(crypto);
+
   // News is registered separately from `transcripts` rather than folded into
   // it: it requires tickers to be meaningful and can spend metered search
   // credits, so it runs only when explicitly asked for (`transcripts news`).
@@ -66,6 +71,7 @@ export function buildRegistry(config: AppConfig) {
     alpaca: market,
     crypto,
     cryptoFundamentals,
+    cryptoSparklines,
     marketSource: hasAlpaca ? "alpaca (yahoo fallback)" : "yahoo",
     fundamentals: new SecFundamentalsProvider(config),
     transcripts: buildTranscriptProviders(config),
