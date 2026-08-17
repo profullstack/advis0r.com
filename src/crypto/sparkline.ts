@@ -11,6 +11,13 @@
  */
 import type { AlpacaCryptoClient } from "./client.ts";
 import type { MarketBar } from "../types.ts";
+import { downsample, toSeries, type SparkSeries } from "../market/series.ts";
+
+// The series maths is shared with the equity watchlist, which draws the same
+// line per row. Re-exported here so the crypto surfaces (and their tests) keep
+// importing it from the module they always did.
+export { downsample, toSeries };
+export type { SparkSeries };
 
 export type SparkPeriod = "24h" | "7d";
 
@@ -28,51 +35,6 @@ const SPECS: Record<SparkPeriod, PeriodSpec> = {
   "24h": { hours: 24, maxPoints: 24, cacheTtlMs: 60_000 },
   "7d": { hours: 24 * 7, maxPoints: 56, cacheTtlMs: 5 * 60_000 },
 };
-
-export interface SparkSeries {
-  symbol: string;
-  /** Closing prices, oldest first. */
-  points: number[];
-  first: number | null;
-  last: number | null;
-  changePercent: number | null;
-  start: string | null;
-  end: string | null;
-}
-
-/**
- * Keep at most `max` points, evenly spaced, always retaining the first and
- * last. Dropping the last point would move the line's endpoint away from the
- * current price and make the card disagree with the number printed beside it.
- */
-export function downsample(values: number[], max: number): number[] {
-  if (max <= 0) return [];
-  if (values.length <= max) return [...values];
-  if (max === 1) return [values.at(-1)!];
-  const step = (values.length - 1) / (max - 1);
-  const out: number[] = [];
-  for (let i = 0; i < max; i++) out.push(values[Math.round(i * step)]!);
-  return out;
-}
-
-/** Bars for one symbol -> the series a card draws. */
-export function toSeries(symbol: string, bars: MarketBar[], maxPoints: number): SparkSeries {
-  const usable = bars.filter((b) => Number.isFinite(b.close));
-  const points = downsample(usable.map((b) => b.close), maxPoints);
-  const first = points[0] ?? null;
-  const last = points.at(-1) ?? null;
-  return {
-    symbol,
-    points,
-    first,
-    last,
-    // Measured across the window actually returned, not the window requested —
-    // a pair with only six hours of history reports its six-hour change.
-    changePercent: first != null && last != null && first !== 0 ? ((last - first) / first) * 100 : null,
-    start: usable[0]?.timestamp ?? null,
-    end: usable.at(-1)?.timestamp ?? null,
-  };
-}
 
 export interface SparklineOptions {
   now?: () => number;

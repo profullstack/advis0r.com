@@ -435,6 +435,9 @@ const server = Bun.serve({
             "POST /api/report/regenerate": "rebuild one snapshot (watchlist members only)",
             "GET /api/discover?topic=&provider=offline&horizon=2&limit=": "ranked watchlist",
             "GET /api/lookup?q=&limit=": "find a ticker by company name (e.g. q=rivian -> RIVN)",
+            "GET /api/watchlist": "your saved tickers (requires sign-in); ?format=csv downloads them",
+            "GET /api/watchlist/overview?range=1M|3M|6M|1Y":
+              "the same tickers priced: per-row changes, sparkline and score, summary statistics, and an equal-weight index against SPY",
             "GET /api/digest": "your watchlist email frequency (requires sign-in)",
             "POST /api/digest": "set frequency: daily | weekly | off",
             "GET /crypto": "crypto market data index — every crypto route is namespaced under /crypto/**",
@@ -802,7 +805,11 @@ const server = Bun.serve({
 
       // The saved watchlist is the one authenticated feature — everything else
       // stays public.
-      const watchlistResponse = await handleWatchlistRoute(req, p, db);
+      const watchlistResponse = await handleWatchlistRoute(req, p, {
+        db,
+        market: registry.alpaca,
+        marketSource: registry.marketSource,
+      });
       if (watchlistResponse) return watchlistResponse;
 
       const creditsResponse = await handleCreditsRoute(req, p, { db, coinpay, appUrl: config.appUrl });

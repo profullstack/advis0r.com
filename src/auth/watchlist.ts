@@ -17,6 +17,8 @@ import { SESSION_COOKIE, readCookie } from "./routes.ts";
 import { userForSession, type PublicUser } from "./service.ts";
 import { reportPrices } from "../reports/store.ts";
 import { WATCHLIST_CSV_FILENAME, formatWatchlistCsv, parseWatchlistCsv } from "./watchlist-csv.ts";
+import { DEFAULT_RANGE, buildWatchlistOverview, isRangeKey } from "../watchlist/overview.ts";
+import type { AlpacaMarketDataClient } from "../providers/interfaces.ts";
 
 /** Tickers per user. Generous, but bounded so one account cannot fill the table. */
 export const MAX_WATCHLIST_ITEMS = 200;
@@ -152,6 +154,13 @@ const json = (body: unknown, status = 200) =>
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 
+export interface WatchlistDeps {
+  db: Client;
+  /** Prices the overview. Absent in tests that only exercise the CRUD paths. */
+  market?: AlpacaMarketDataClient;
+  marketSource?: string;
+}
+
 /**
  * Handle a /api/watchlist request. Returns null when the path does not match,
  * so the caller can continue routing.
@@ -162,13 +171,32 @@ const json = (body: unknown, status = 200) =>
 export async function handleWatchlistRoute(
   req: Request,
   path: string,
-  db: Client,
+  deps: WatchlistDeps | Client,
 ): Promise<Response | null> {
-  if (path !== "/api/watchlist") return null;
+  // Accepting a bare client keeps the older two-argument call sites working.
+  const resolved: WatchlistDeps = "execute" in deps ? { db: deps as Client } : (deps as WatchlistDeps);
+  const db = resolved.db;
+  const isOverview = path === "/api/watchlist/overview";
+  if (path !== "/api/watchlist" && !isOverview) return null;
 
   const user: PublicUser | null = await userForSession(db, readCookie(req, SESSION_COOKIE));
   if (!user) {
     return json({ error: "Sign in to use your watchlist.", authRequired: true }, 401);
+  }
+
+  // The priced, charted view of the same rows. Read-only, so it is GET-only.
+  if (isOverview) {
+    if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
+    if (!resolved.market) {
+      return json({ error: "Market data is not configured on this server." }, 503);
+    }
+    const raw = new URL(req.url).searchParams.get("range");
+    const overview = await buildWatchlistOverview(
+      { db, market: resolved.market, marketSource: resolved.marketSource },
+      await listWatchlist(db, user.id),
+      { range: isRangeKey(raw) ? raw : DEFAULT_RANGE },
+    );
+    return json(overview);
   }
 
   if (req.method === "GET") {

@@ -11,18 +11,49 @@ async function api(path) {
   return res.json();
 }
 
-/* ---- Tab routing ---- */
-function showView(name) {
+/* ---- Tab routing ----
+   Each tab is a path — /watchlist, /discover — not a fragment. A fragment is
+   invisible to the server, so it cannot be linked to from an email, cannot be
+   crawled, and is dropped by anything that rewrites URLs. The server already
+   answers an unknown path with the app shell, so the only thing needed here is
+   to keep the address bar and the history stack honest.
+
+   Fragments still work: /#watchlist is upgraded to /watchlist on arrival, so
+   older links keep landing in the right place. */
+const VIEWS = ["discover", "watchlist", "search", "signals", "crypto", "about"];
+
+/** The view a URL asks for, by path first and then by legacy fragment. */
+function viewFromLocation() {
+  const seg = location.pathname.replace(/^\/+|\/+$/g, "");
+  if (VIEWS.includes(seg)) return seg;
+  const hash = (location.hash || "").replace(/^#/, "");
+  return VIEWS.includes(hash) ? hash : null;
+}
+
+function showView(name, opts = {}) {
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
-  location.hash = name;
+  if (opts.history !== false) {
+    // The query string travels with the view: it carries the watchlist's sort,
+    // filter and range, which is what makes a configured table shareable.
+    const target = `/${name}${location.search}`;
+    const current = location.pathname + location.search;
+    try {
+      if (current !== target) history[opts.replace ? "replaceState" : "pushState"]({ view: name }, "", target);
+    } catch { /* a sandboxed frame cannot write history; the view still switches */ }
+  }
   // Crypto prices are only fetched once the tab is actually opened — loading
   // them on boot would spend upstream calls for every visitor who never looks.
   if (name === "crypto") loadCryptoGrid();
+  if (name === "watchlist") openWatchlistTab();
 }
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (b) showView(b.dataset.view);
+});
+// Back and forward move between tabs instead of leaving the app.
+window.addEventListener("popstate", () => {
+  showView(viewFromLocation() ?? "discover", { history: false });
 });
 
 /* ---- Health + about stats ---- */
@@ -323,6 +354,7 @@ async function exportDiscover() {
     const res = await wlApi("POST", { csv: discoverCsv() });
     // Re-renders the Watchlist tab and flips these cards' buttons to ✓ Watching.
     renderMyWatchlist(res.items || []);
+    loadWatchlistOverview();
     $("#wl-summary").textContent = `${importSummary(res)} See the Watchlist tab.`;
   } catch (e) {
     if (e.authRequired) { openAuth("login"); return; }
@@ -398,10 +430,11 @@ async function boot() {
   loadTopics();
   const disc = "This output is generated from public information and automated analysis. It is a research aid, not a guarantee, personalized recommendation, or substitute for professional financial advice. Small-cap and low-priced stocks may be highly volatile, illiquid, subject to dilution, manipulation, delisting, and total loss.";
   $("#disclaimer").textContent = disc;
-  // "discover" was missing from this list after the view rename, so a link to
-  // /#discover landed on the per-user Watchlist tab instead.
-  const start = (location.hash || "#discover").slice(1);
-  showView(["discover", "watchlist", "search", "signals", "crypto", "about"].includes(start) ? start : "discover");
+  // Restore the tab from the URL. `replace` rather than push, so arriving at
+  // /#watchlist rewrites the address bar to /watchlist without leaving a
+  // fragment entry behind for Back to land on.
+  restoreWatchlistPrefs();
+  showView(viewFromLocation() ?? "discover", { replace: true });
   runWatchlist();
   // Deep link from a digest email: /?ticker=NVDA opens that stock's detail.
   const params = new URL(location.href).searchParams;
@@ -1118,26 +1151,509 @@ async function wlApi(method, body) {
   return data;
 }
 
-function renderMyWatchlist(items) {
-  myTickers = new Set(items.map((i) => i.ticker));
+/* ---- Watchlist dashboard state ----
+   Two payloads back this tab. `/api/watchlist` is the membership list — it is
+   what add and remove return, so it is the source of truth for what is saved.
+   `/api/watchlist/overview` is the same rows priced, scored and charted; it
+   costs a market fetch, so it is loaded alongside rather than instead, and the
+   table degrades to the plain list when it is missing.
+
+   Sort, filter and range live in the URL as well as in localStorage: the
+   address bar makes a configured table shareable, storage makes it the way you
+   left it on the next visit. */
+
+const WL_STORE_KEY = "wl-view";
+const WL_RANGES = ["1M", "3M", "6M", "1Y"];
+const WL_DEFAULTS = { range: "3M", sort: "range", dir: "desc", q: "", cls: "all" };
+
+let wlView = { ...WL_DEFAULTS };
+let wlItems = [];        // saved rows: {ticker, note, createdAt}
+let wlOverview = null;   // the priced payload, or null before it lands
+let wlLoadingOverview = false;
+/** A one-off message (an import result, an error) shown ahead of the prices. */
+let wlNotice = "";
+
+function restoreWatchlistPrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WL_STORE_KEY) || "{}");
+    for (const k of Object.keys(WL_DEFAULTS)) {
+      if (typeof saved[k] === "string") wlView[k] = saved[k];
+    }
+  } catch { /* blocked storage: the defaults are fine */ }
+  // A link wins over what this browser last did — that is the point of putting
+  // it in the URL.
+  const params = new URL(location.href).searchParams;
+  for (const k of Object.keys(WL_DEFAULTS)) {
+    const v = params.get(k === "q" ? "q" : k);
+    if (v != null) wlView[k] = v;
+  }
+  if (!WL_RANGES.includes(wlView.range)) wlView.range = WL_DEFAULTS.range;
+  if (wlView.dir !== "asc" && wlView.dir !== "desc") wlView.dir = WL_DEFAULTS.dir;
+}
+
+function persistWatchlistPrefs() {
+  try { localStorage.setItem(WL_STORE_KEY, JSON.stringify(wlView)); } catch { /* ignore */ }
+  // Only rewrite the URL while the watchlist is the visible tab, so switching
+  // to Search does not leave the table's state stuck to a different path.
+  if (!document.querySelector('.view[data-view="watchlist"]')?.classList.contains("active")) return;
+  const url = new URL(location.href);
+  for (const [k, def] of Object.entries(WL_DEFAULTS)) {
+    if (wlView[k] && wlView[k] !== def) url.searchParams.set(k, wlView[k]);
+    else url.searchParams.delete(k);
+  }
+  try { history.replaceState(history.state, "", `${url.pathname}${url.search}`); } catch { /* ignore */ }
+}
+
+/* ---- Formatting ---- */
+
+const wlPct = (n, dp = 2) => (n == null || !isFinite(n) ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(dp)}%`);
+const wlSign = (n) => (n == null || !isFinite(n) ? "" : n > 0 ? "pos" : n < 0 ? "neg" : "");
+const wlMoney = (n) => (n == null || !isFinite(n) ? "—" : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+const wlDate = (iso) => (iso ? String(iso).slice(0, 10) : "—");
+const changeOf = (item, label) => item.changes?.find((c) => c.label === label)?.percent ?? null;
+
+/* ---- Summary tiles ---- */
+
+function wlStatTile(label, value, sub, cls = "") {
+  return `<div class="wl-stat">
+    <span class="wl-stat-lab">${esc(label)}</span>
+    <b class="wl-stat-val ${cls}">${value}</b>
+    <span class="wl-stat-sub">${sub}</span>
+  </div>`;
+}
+
+function renderWlStats() {
+  const el = document.getElementById("wl-stats");
+  if (!el || !wlOverview) return;
+  const s = wlOverview.stats;
+  const range = wlOverview.range;
+  const mover = (m) => (m ? `<span class="wl-stat-tick">${esc(m.ticker)}</span> ${wlPct(m.percent, 1)}` : "—");
+
+  el.innerHTML = [
+    wlStatTile(
+      "Tickers",
+      String(s.count),
+      `${s.priced} priced${s.missing.length ? ` · ${s.missing.length} without data` : ""}`,
+    ),
+    wlStatTile(
+      "Last session",
+      wlPct(s.avgDayPercent, 2),
+      `${s.gainers} up · ${s.losers} down`,
+      wlSign(s.avgDayPercent),
+    ),
+    wlStatTile(
+      `${range} equal-weight`,
+      wlPct(s.rangePercent, 1),
+      s.benchmarkPercent != null ? `SPY ${wlPct(s.benchmarkPercent, 1)}` : "no benchmark data",
+      wlSign(s.rangePercent),
+    ),
+    wlStatTile("Best", mover(s.best), `over ${range}`, s.best ? wlSign(s.best.percent) : ""),
+    wlStatTile("Worst", mover(s.worst), `over ${range}`, s.worst ? wlSign(s.worst.percent) : ""),
+    wlStatTile(
+      "Avg score",
+      s.avgScore != null ? `${Math.round(s.avgScore)}<span class="wl-stat-of">/100</span>` : "—",
+      `${s.scored} of ${s.count} scored`,
+    ),
+  ].join("");
+}
+
+/* ---- The index chart ----
+   Both lines are rebased to 100 at the start of the window, so one axis carries
+   both: an equal-weight watchlist and a broad-market ETF have nothing in common
+   in dollars, and drawing them against two scales would let any pair of lines
+   be made to tell any story. Percentages from a shared base is the honest form.
+
+   Drawn as inline SVG at real pixel coordinates rather than through the chart
+   vendor: two rebased lines need no candles, no panes and no time-scale sync,
+   and this way the crosshair, the dashed benchmark and the end labels are
+   exactly what they look like. */
+
+const WL_CHART_H = 230;
+/** Room on the right for the end labels; dropped when the chart is narrow. */
+const WL_LABEL_W = 116;
+const WL_CHART_PAD = { top: 16, right: WL_LABEL_W, bottom: 24, left: 46 };
+/** Below this the end labels would take more room than the lines. */
+const WL_LABEL_MIN_W = 520;
+
+let wlChartGeom = null;
+
+/**
+ * Gridline values on a 1 / 2 / 2.5 / 5 ladder rather than the raw domain split
+ * evenly — "15%, 10%, 4%, -1%" is a scale nobody reads twice.
+ */
+function niceTicks(lo, hi, count = 5) {
+  const raw = (hi - lo) / Math.max(1, count - 1);
+  if (!(raw > 0)) return [lo];
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(Number(v.toFixed(6)));
+  return out.length ? out : [lo, hi];
+}
+
+function wlChartPaths(index, width) {
+  const dates = [...new Set([...index.points, ...index.benchmark].map((p) => p.t))].sort();
+  if (dates.length < 2) return null;
+  const xAt = new Map(dates.map((d, i) => [d, i]));
+  // On a narrow chart the end labels are dropped, not shrunk: the legend below
+  // already names both lines, and a squeezed plot reads worse than no label.
+  const labelled = width >= WL_LABEL_MIN_W;
+  const padRight = labelled ? WL_CHART_PAD.right : 16;
+  const plotW = Math.max(60, width - WL_CHART_PAD.left - padRight);
+  const plotH = WL_CHART_H - WL_CHART_PAD.top - WL_CHART_PAD.bottom;
+
+  const values = [...index.points, ...index.benchmark].map((p) => p.value).concat(100);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = (max - min) * 0.08 || 1;
+  const lo = min - pad;
+  const hi = max + pad;
+
+  const x = (t) => WL_CHART_PAD.left + (xAt.get(t) / (dates.length - 1)) * plotW;
+  const y = (v) => WL_CHART_PAD.top + (1 - (v - lo) / (hi - lo)) * plotH;
+  const project = (pts) => pts.filter((p) => xAt.has(p.t)).map((p) => ({ ...p, x: x(p.t), y: y(p.value) }));
+
+  return {
+    dates, lo, hi, plotW, plotH, x, y, labelled,
+    series: [
+      { key: "watchlist", label: "Watchlist", color: "var(--chart-1)", dashed: false, points: project(index.points) },
+      { key: "benchmark", label: index.benchmarkSymbol, color: "var(--chart-2)", dashed: true, points: project(index.benchmark) },
+    ].filter((s) => s.points.length >= 2),
+  };
+}
+
+const wlPathD = (points) => points.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join("");
+
+function renderWlChart() {
+  const box = document.getElementById("wl-chart");
+  const legend = document.getElementById("wl-chart-legend");
+  const note = document.getElementById("wl-chart-note");
+  if (!box) return;
+  const index = wlOverview?.index;
+  if (!index || index.points.length < 2) {
+    wlChartGeom = null;
+    box.innerHTML = `<p class="empty wl-chart-empty">Not enough shared price history to chart this watchlist yet.</p>`;
+    if (legend) legend.innerHTML = "";
+    if (note) note.textContent = "";
+    return;
+  }
+
+  const width = box.clientWidth || 720;
+  const geom = wlChartPaths(index, width);
+  if (!geom) return;
+  wlChartGeom = geom;
+
+  // Recessive gridlines with their own value labels. A rebased chart reads in
+  // percent, so they are labelled that way rather than as index points.
+  const ticks = niceTicks(geom.lo, geom.hi);
+  const dp = Math.abs((ticks[1] ?? 100) - (ticks[0] ?? 0)) < 1 ? 1 : 0;
+  const grid = ticks
+    .map((v) => `<g><line class="wl-grid" x1="${WL_CHART_PAD.left}" x2="${WL_CHART_PAD.left + geom.plotW}" y1="${geom.y(v).toFixed(1)}" y2="${geom.y(v).toFixed(1)}"/>
+      <text class="wl-axis" x="${WL_CHART_PAD.left - 8}" y="${(geom.y(v) + 3.5).toFixed(1)}" text-anchor="end">${(v - 100).toFixed(dp)}%</text></g>`)
+    .join("");
+
+  const lines = geom.series
+    .map((s) => `<path class="wl-line" d="${wlPathD(s.points)}" fill="none" stroke="${s.color}"
+        stroke-width="2" stroke-linejoin="round" stroke-linecap="round"
+        ${s.dashed ? 'stroke-dasharray="5 4"' : ""}/>`)
+    .join("");
+
+  // Direct end labels: identity never rests on colour alone.
+  const ends = geom.series
+    .map((s) => {
+      const last = s.points.at(-1);
+      const pct = last.value - 100;
+      const label = geom.labelled
+        ? `<text class="wl-endlab" x="${(last.x + 8).toFixed(1)}" y="${(last.y + 4).toFixed(1)}" fill="${s.color}">${esc(s.label)} ${wlPct(pct, 1)}</text>`
+        : "";
+      return `<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.5" fill="${s.color}" stroke="var(--panel-2)" stroke-width="2"/>${label}</g>`;
+    })
+    .join("");
+
+  const first = geom.dates[0];
+  const last = geom.dates.at(-1);
+  const axis = `<text class="wl-axis" x="${WL_CHART_PAD.left}" y="${WL_CHART_H - 6}">${esc(first)}</text>
+    <text class="wl-axis" x="${WL_CHART_PAD.left + geom.plotW}" y="${WL_CHART_H - 6}" text-anchor="end">${esc(last)}</text>`;
+
+  box.innerHTML = `<svg class="wl-svg" width="${width}" height="${WL_CHART_H}" viewBox="0 0 ${width} ${WL_CHART_H}" role="img"
+      aria-label="Watchlist versus ${esc(index.benchmarkSymbol)}, rebased to 100">
+    ${grid}
+    <line class="wl-base" x1="${WL_CHART_PAD.left}" x2="${WL_CHART_PAD.left + geom.plotW}" y1="${geom.y(100).toFixed(1)}" y2="${geom.y(100).toFixed(1)}"/>
+    ${lines}${ends}${axis}
+    <g class="wl-cross" hidden>
+      <line class="wl-cross-line" x1="${WL_CHART_PAD.left}" x2="${WL_CHART_PAD.left}" y1="${WL_CHART_PAD.top}" y2="${WL_CHART_PAD.top + geom.plotH}"/>
+      ${geom.series.map((s) => `<circle class="wl-cross-dot" data-series="${s.key}" r="4" fill="${s.color}" stroke="var(--panel-2)" stroke-width="2"/>`).join("")}
+    </g>
+  </svg>`;
+
+  if (legend) {
+    legend.innerHTML = geom.series
+      .map((s) => `<span class="wl-legend-item" data-series="${s.key}">
+        <i class="wl-swatch${s.dashed ? " dashed" : ""}" style="--sw:${s.color}"></i>
+        ${esc(s.label)} <b class="wl-legend-val">${wlPct(s.points.at(-1).value - 100, 1)}</b>
+      </span>`)
+      .join("");
+  }
+  if (note) {
+    const excluded = index.excluded.length
+      ? ` ${index.excluded.length} ticker${index.excluded.length === 1 ? "" : "s"} left out for want of history over the window (${index.excluded.slice(0, 6).map(esc).join(", ")}${index.excluded.length > 6 ? "…" : ""}).`
+      : "";
+    note.textContent = `Equal-weight across ${index.members.length} ticker${index.members.length === 1 ? "" : "s"}, rebased to 100 at ${first}.${excluded}`;
+  }
+
+  attachWlCrosshair(box.querySelector("svg"), legend);
+}
+
+/** Hover anywhere on the plot: both lines report their value at that session. */
+function attachWlCrosshair(svg, legend) {
+  if (!svg || !wlChartGeom) return;
+  const cross = svg.querySelector(".wl-cross");
+  const geom = wlChartGeom;
+
+  const move = (clientX) => {
+    const rect = svg.getBoundingClientRect();
+    // A zero-width rect means the element is not laid out (or is off-screen);
+    // there is nothing meaningful to point at.
+    if (!rect.width) return;
+    const px = ((clientX - rect.left) / rect.width) * (svg.viewBox?.baseVal?.width || rect.width);
+    let best = null;
+    for (const s of geom.series) {
+      for (const p of s.points) {
+        const d = Math.abs(p.x - px);
+        if (!best || d < best.d) best = { d, t: p.t };
+      }
+    }
+    if (!best) return;
+    cross?.removeAttribute("hidden");
+    const lineEl = cross?.querySelector(".wl-cross-line");
+    let lineX = null;
+    for (const s of geom.series) {
+      const point = s.points.find((p) => p.t === best.t) ?? null;
+      const dot = cross?.querySelector(`[data-series="${s.key}"]`);
+      if (dot) {
+        if (point) { dot.setAttribute("cx", point.x); dot.setAttribute("cy", point.y); dot.removeAttribute("hidden"); }
+        else dot.setAttribute("hidden", "");
+      }
+      if (point) lineX = point.x;
+      const val = legend?.querySelector(`[data-series="${s.key}"] .wl-legend-val`);
+      if (val) val.textContent = point ? wlPct(point.value - 100, 1) : "—";
+    }
+    if (lineEl && lineX != null) { lineEl.setAttribute("x1", lineX); lineEl.setAttribute("x2", lineX); }
+    const cap = document.getElementById("wl-chart-cap");
+    if (cap) cap.dataset.hover = best.t;
+    const dateEl = legend?.querySelector(".wl-legend-date");
+    if (dateEl) dateEl.textContent = best.t;
+  };
+
+  const leave = () => {
+    cross?.setAttribute("hidden", "");
+    for (const s of geom.series) {
+      const val = legend?.querySelector(`[data-series="${s.key}"] .wl-legend-val`);
+      if (val) val.textContent = wlPct(s.points.at(-1).value - 100, 1);
+    }
+    const dateEl = legend?.querySelector(".wl-legend-date");
+    if (dateEl) dateEl.textContent = geom.dates.at(-1);
+  };
+
+  if (legend && !legend.querySelector(".wl-legend-date")) {
+    legend.insertAdjacentHTML("beforeend", `<span class="wl-legend-date">${esc(geom.dates.at(-1))}</span>`);
+  }
+  svg.addEventListener("mousemove", (e) => move(e.clientX));
+  svg.addEventListener("mouseleave", leave);
+  svg.addEventListener("touchmove", (e) => { const t = e.touches[0]; if (t) move(t.clientX); }, { passive: true });
+  svg.addEventListener("touchend", leave);
+}
+
+/* ---- Filtering + sorting ---- */
+
+const WL_COLUMNS = [
+  { key: "ticker", label: "Ticker", type: "text" },
+  { key: "company", label: "Company", type: "text" },
+  { key: "price", label: "Price", type: "num" },
+  { key: "d1", label: "1D", type: "num" },
+  { key: "w1", label: "1W", type: "num", optional: true },
+  { key: "m1", label: "1M", type: "num", optional: true },
+  { key: "range", label: "", type: "num" },          // label follows the range
+  { key: "spark", label: "Trend", type: "none" },
+  { key: "score", label: "Score", type: "num" },
+  { key: "fromHigh", label: "From high", type: "num", optional: true },
+  { key: "added", label: "Added", type: "text", optional: true },
+  { key: "act", label: "", type: "none" },
+];
+
+const WL_VALUE = {
+  ticker: (i) => i.ticker,
+  company: (i) => (i.companyName || "").toLowerCase(),
+  price: (i) => i.price,
+  d1: (i) => changeOf(i, "1D"),
+  w1: (i) => changeOf(i, "1W"),
+  m1: (i) => changeOf(i, "1M"),
+  range: (i) => i.rangePercent,
+  score: (i) => (i.overallScore == null ? null : i.overallScore),
+  fromHigh: (i) => i.fromHigh52,
+  added: (i) => i.createdAt || "",
+};
+
+function wlVisibleRows() {
+  const items = wlOverview?.items ?? [];
+  const q = wlView.q.trim().toLowerCase();
+  const cls = wlView.cls;
+  const filtered = items.filter((i) => {
+    if (cls !== "all" && (i.classification || "unclassified") !== cls) return false;
+    if (!q) return true;
+    return `${i.ticker} ${i.companyName || ""} ${i.note || ""}`.toLowerCase().includes(q);
+  });
+
+  const pick = WL_VALUE[wlView.sort] ?? WL_VALUE.range;
+  const dir = wlView.dir === "asc" ? 1 : -1;
+  return filtered.sort((a, b) => {
+    const va = pick(a);
+    const vb = pick(b);
+    // Missing data sorts last in both directions: a ticker with no price is not
+    // "the smallest mover", it is unknown, and floating it to the top of an
+    // ascending sort would read as a fact.
+    if (va == null && vb == null) return a.ticker.localeCompare(b.ticker);
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === "string" || typeof vb === "string") return String(va).localeCompare(String(vb)) * dir;
+    return (va - vb) * dir;
+  });
+}
+
+function wlSortHeader(col) {
+  const label = col.key === "range" ? wlView.range : col.label;
+  if (col.type === "none") return `<th class="wl-th-${col.key}${col.optional ? " wl-opt" : ""}">${esc(label)}</th>`;
+  const on = wlView.sort === col.key;
+  const arrow = on ? (wlView.dir === "asc" ? "▲" : "▼") : "";
+  return `<th class="wl-th-${col.key} ${col.type === "num" ? "num" : ""}${col.optional ? " wl-opt" : ""}"
+      aria-sort="${on ? (wlView.dir === "asc" ? "ascending" : "descending") : "none"}">
+      <button type="button" class="wl-sort${on ? " on" : ""}" data-sort="${col.key}">${esc(label)}<span class="wl-arrow">${arrow}</span></button>
+    </th>`;
+}
+
+function wlRow(i) {
+  const rangeCls = wlSign(i.rangePercent);
+  const stale = wlOverview?.asOf && i.priceAsOf && i.priceAsOf < wlOverview.asOf;
+  return `<tr class="wl-row" data-ticker="${esc(i.ticker)}">
+    <td class="wl-c-ticker"><a class="wl-tick" href="/stocks/${encodeURIComponent(i.ticker)}">${esc(i.ticker)}</a>
+      ${i.hasReport ? "" : '<span class="wl-noreport" title="No stored report yet — open it to generate one">·</span>'}</td>
+    <td class="wl-c-company"><span class="wl-name">${esc(i.companyName || "—")}</span>
+      ${i.note ? `<span class="wl-note">${esc(i.note)}</span>` : ""}</td>
+    <td class="num wl-c-price">${wlMoney(i.price)}${
+      stale ? `<span class="wl-stale" title="Last bar ${esc(i.priceAsOf)}">·</span>` : ""
+    }</td>
+    <td class="num ${wlSign(changeOf(i, "1D"))}">${wlPct(changeOf(i, "1D"))}</td>
+    <td class="num wl-opt ${wlSign(changeOf(i, "1W"))}">${wlPct(changeOf(i, "1W"))}</td>
+    <td class="num wl-opt ${wlSign(changeOf(i, "1M"))}">${wlPct(changeOf(i, "1M"))}</td>
+    <td class="num ${rangeCls}">${wlPct(i.rangePercent, 1)}</td>
+    <!-- Line only, no area fill: a filled sparkline in a dense table row is a
+         block of colour, and eight of them stop being marks and become a
+         background. -->
+    <td class="wl-c-spark">${sparkSvg(i.spark, (i.rangePercent ?? 0) >= 0, "wl-spark", false)}</td>
+    <td class="num wl-c-score">${
+      i.overallScore == null ? "—" : `<span class="wl-score ${classClass(i.classification)}">${Math.round(i.overallScore)}</span>`
+    }</td>
+    <td class="num wl-opt">${i.fromHigh52 == null ? "—" : wlPct(i.fromHigh52, 1)}</td>
+    <td class="wl-opt wl-c-added">${wlDate(i.createdAt)}</td>
+    <td class="wl-c-act"><button class="wl-remove" data-remove="${esc(i.ticker)}" title="Remove ${esc(i.ticker)} from your watchlist" aria-label="Remove ${esc(i.ticker)}">✕</button></td>
+  </tr>`;
+}
+
+function renderWlTable() {
   const list = document.getElementById("my-list");
+  if (!list) return;
+  const rows = wlVisibleRows();
+  const count = document.getElementById("wl-count");
+  if (count) {
+    const total = wlOverview?.items.length ?? 0;
+    count.textContent = rows.length === total ? `${total} ticker${total === 1 ? "" : "s"}` : `${rows.length} of ${total}`;
+  }
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">No rows match that filter.</div>`;
+    return;
+  }
+  list.innerHTML = `<div class="wl-tablewrap"><table class="wl-table">
+    <thead><tr>${WL_COLUMNS.map(wlSortHeader).join("")}</tr></thead>
+    <tbody>${rows.map(wlRow).join("")}</tbody>
+  </table></div>`;
+}
+
+/** The risk-class filter, built from the classes actually present. */
+function renderWlClassFilter() {
+  const el = document.getElementById("wl-classes");
+  if (!el || !wlOverview) return;
+  const present = [...new Set(wlOverview.items.map((i) => i.classification).filter(Boolean))];
+  if (!present.includes(wlView.cls) && wlView.cls !== "all") wlView.cls = "all";
+  el.innerHTML = ["all", ...present]
+    .map((c) => `<button type="button" data-class="${esc(c)}" class="${wlView.cls === c ? "on" : ""}">${
+      esc(c === "all" ? "All" : c === "high-risk speculative" ? "high risk" : c)
+    }</button>`)
+    .join("");
+}
+
+function renderWlRanges() {
+  for (const b of $$("#wl-ranges button")) b.classList.toggle("on", b.dataset.range === wlView.range);
+  const filter = document.getElementById("wl-filter");
+  if (filter && filter.value !== wlView.q) filter.value = wlView.q;
+}
+
+/* ---- Rendering the tab ---- */
+
+function renderWatchlist() {
+  const list = document.getElementById("my-list");
+  const dash = document.getElementById("wl-dash");
   const summary = document.getElementById("my-summary");
   if (!list) return;
-  if (summary) summary.textContent = items.length
-    ? `${items.length} ticker${items.length === 1 ? "" : "s"} saved`
-    : "";
-  list.innerHTML = items.length
-    ? items.map((i) => `<div class="card wl-row" data-ticker="${esc(i.ticker)}">
-        <div class="wl-main">
-          <!-- Navigates to the shareable report page. It used to be intercepted
-               into a modal, which meant the URL never changed and there was
-               nothing to copy. -->
-          <a href="/stocks/${encodeURIComponent(i.ticker)}" class="wl-tick">${esc(i.ticker)}</a>
-          ${i.note ? `<span class="wl-note">${esc(i.note)}</span>` : ""}
-        </div>
+
+  if (!wlItems.length) {
+    if (dash) dash.hidden = true;
+    if (summary) summary.textContent = "";
+    list.innerHTML = `<div class="empty">Nothing saved yet. Add a ticker above, or use “+ Watchlist” on any Discover result.</div>`;
+    return;
+  }
+
+  if (summary) {
+    const s = wlOverview?.stats;
+    const line = wlOverview
+      ? `${wlItems.length} saved · prices from ${wlOverview.source}${wlOverview.asOf ? ` through ${wlOverview.asOf}` : ""}${
+          s?.missing.length ? ` · no data for ${s.missing.join(", ")}` : ""
+        }${wlOverview.marketError ? ` · market data unavailable (${wlOverview.marketError})` : ""}`
+      : `${wlItems.length} ticker${wlItems.length === 1 ? "" : "s"} saved · pricing…`;
+    summary.textContent = wlNotice ? `${wlNotice} · ${line}` : line;
+  }
+
+  // Before the overview lands (or when market data is down) the plain list is
+  // still useful, and is what every add/remove renders instantly.
+  if (!wlOverview) {
+    if (dash) dash.hidden = true;
+    list.innerHTML = wlItems
+      .map((i) => `<div class="card wl-plain" data-ticker="${esc(i.ticker)}">
+        <a href="/stocks/${encodeURIComponent(i.ticker)}" class="wl-tick">${esc(i.ticker)}</a>
+        ${i.note ? `<span class="wl-note">${esc(i.note)}</span>` : ""}
         <button class="wl-remove" data-remove="${esc(i.ticker)}" title="Remove from watchlist">Remove</button>
-      </div>`).join("")
-    : `<div class="empty">Nothing saved yet. Add a ticker above, or use “+ Watchlist” on any Discover result.</div>`;
+      </div>`)
+      .join("");
+    return;
+  }
+
+  if (dash) dash.hidden = false;
+  renderWlStats();
+  renderWlChart();
+  renderWlRanges();
+  renderWlClassFilter();
+  renderWlTable();
+}
+
+function renderMyWatchlist(items) {
+  wlItems = items;
+  myTickers = new Set(items.map((i) => i.ticker));
+  // Keep the priced view consistent with membership straight away: a removed
+  // row should leave the table on click, not on the next fetch.
+  if (wlOverview) {
+    wlOverview.items = wlOverview.items.filter((i) => myTickers.has(i.ticker));
+    if (!wlOverview.items.length && items.length) wlOverview = null;
+  }
+  renderWatchlist();
   // Keep Discover buttons in sync with what is now saved.
   document.querySelectorAll("[data-watch]").forEach(syncWatchButton);
   // Adding the open ticker to the watchlist is what unlocks its Regenerate
@@ -1159,24 +1675,115 @@ function syncWatchButton(btn) {
 async function loadMyWatchlist() {
   const list = document.getElementById("my-list");
   const summary = document.getElementById("my-summary");
+  const dash = document.getElementById("wl-dash");
   if (!list) return;
   try {
     const { items } = await wlApi("GET");
     renderMyWatchlist(items || []);
   } catch (e) {
     myTickers = new Set();
+    wlItems = [];
+    wlOverview = null;
     if (summary) summary.textContent = "";
+    if (dash) dash.hidden = true;
     list.innerHTML = e.authRequired
       ? `<div class="empty">Your watchlist is private to your account.<br><button class="primary wl-signin" style="margin-top:.7rem">Sign in to continue</button></div>`
       : `<div class="empty">Could not load your watchlist (${esc(e.message)}).</div>`;
   }
 }
 
+/**
+ * The priced view. Deliberately separate from the membership fetch: it costs a
+ * market request, it can fail on its own, and losing it must never cost the
+ * list of what is saved.
+ */
+async function loadWatchlistOverview() {
+  if (wlLoadingOverview) return;
+  wlLoadingOverview = true;
+  try {
+    const res = await fetch(`/api/watchlist/overview?range=${encodeURIComponent(wlView.range)}`, {
+      credentials: "same-origin",
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    if (!data || !Array.isArray(data.items)) return;
+    wlOverview = data;
+    renderWatchlist();
+  } catch {
+    // Keep whatever is already on screen; the summary line says what is known.
+  } finally {
+    wlLoadingOverview = false;
+  }
+}
+
+/** Everything the tab needs, in the order that puts something on screen first. */
+function openWatchlistTab() {
+  wlNotice = "";
+  loadMyWatchlist();
+  loadDigestPrefs();
+  loadWatchlistOverview();
+}
+
+/* ---- Watchlist controls ---- */
+
+document.addEventListener("click", (e) => {
+  const sort = e.target.closest("[data-sort]");
+  if (sort) {
+    e.preventDefault();
+    const key = sort.dataset.sort;
+    // Clicking the active column flips it; a new column starts on the reading
+    // most people want — biggest first for numbers, A-Z for text.
+    if (wlView.sort === key) wlView.dir = wlView.dir === "asc" ? "desc" : "asc";
+    else {
+      wlView.sort = key;
+      wlView.dir = WL_COLUMNS.find((c) => c.key === key)?.type === "text" ? "asc" : "desc";
+    }
+    persistWatchlistPrefs();
+    renderWlTable();
+    return;
+  }
+  const range = e.target.closest("#wl-ranges [data-range]");
+  if (range) {
+    e.preventDefault();
+    if (range.dataset.range === wlView.range) return;
+    wlView.range = range.dataset.range;
+    persistWatchlistPrefs();
+    renderWlRanges();
+    loadWatchlistOverview();
+    return;
+  }
+  const cls = e.target.closest("#wl-classes [data-class]");
+  if (cls) {
+    e.preventDefault();
+    wlView.cls = cls.dataset.class;
+    persistWatchlistPrefs();
+    renderWlClassFilter();
+    renderWlTable();
+  }
+});
+
+document.getElementById("wl-filter")?.addEventListener("input", (e) => {
+  wlView.q = e.target.value;
+  persistWatchlistPrefs();
+  renderWlTable();
+});
+
+// The chart is drawn at pixel coordinates, so a resized window needs a redraw.
+let wlResizeTimer = null;
+window.addEventListener("resize", () => {
+  if (!wlOverview) return;
+  clearTimeout(wlResizeTimer);
+  wlResizeTimer = setTimeout(renderWlChart, 150);
+});
+
 async function toggleWatch(ticker) {
   const on = myTickers.has(ticker);
   try {
     const { items } = await wlApi(on ? "DELETE" : "POST", { ticker });
     renderMyWatchlist(items || []);
+    // A newly saved ticker has no price yet. The bars for everything else are
+    // already cached server-side, so this re-fetch is one symbol's worth.
+    if (!on) loadWatchlistOverview();
   } catch (e) {
     if (e.authRequired) { openAuth("login"); return; }
     alert(e.message);
@@ -1277,6 +1884,7 @@ async function toggleWatchAdd(ticker) {
   try {
     const { items } = await wlApi("POST", { ticker });
     renderMyWatchlist(items || []);
+    loadWatchlistOverview();
   } catch (e) {
     if (e.authRequired) { openAuth("login"); return; }
     alert(e.message);
@@ -1300,6 +1908,10 @@ document.getElementById("my-add")?.addEventListener("keydown", (e) => {
    the file's text and lets the server parse it. */
 
 function setMySummary(text) {
+  // Held rather than written straight to the element: the tab re-renders its
+  // summary line whenever prices land, which would otherwise wipe an import
+  // result a second after showing it.
+  wlNotice = text;
   const summary = document.getElementById("my-summary");
   if (summary) summary.textContent = text;
 }
@@ -1320,6 +1932,7 @@ async function importWatchlistFile(file) {
   try {
     const res = await wlApi("POST", { csv: text });
     renderMyWatchlist(res.items || []);
+    loadWatchlistOverview();
     setMySummary(importSummary(res));
   } catch (e) {
     if (e.authRequired) { openAuth("login"); return; }
@@ -1438,11 +2051,9 @@ document.addEventListener("click", (e) => {
   if (opt) { e.preventDefault(); setDigestFrequency(opt.dataset.digest); }
 });
 
-// Load on first visit to the tab, and refresh after any auth change.
-document.addEventListener("click", (e) => {
-  if (e.target.closest('#tabs button[data-view="watchlist"]')) { loadMyWatchlist(); loadDigestPrefs(); }
-});
-window.addEventListener("advis0r:auth-changed", () => { loadMyWatchlist(); loadDigestPrefs(); });
+// Opening the tab loads it (see showView); an auth change reloads it, because
+// signing in is what turns the prompt into somebody's actual watchlist.
+window.addEventListener("advis0r:auth-changed", () => { openWatchlistTab(); });
 
 
 /* ---- Sign-in promo for the AI analysis paths ----
@@ -1528,7 +2139,7 @@ function fmtPrice(n) {
  * viewBox coordinates with preserveAspectRatio="none" so one path stretches to
  * whatever width the card ends up — no measuring, no redraw on resize.
  */
-function cryptoSparkSvg(points, rising) {
+function sparkSvg(points, rising, className = "cx-spark", filled = true) {
   if (!Array.isArray(points) || points.length < 2) return "";
   const w = 100;
   const h = 28;
@@ -1540,8 +2151,8 @@ function cryptoSparkSvg(points, rising) {
   const y = (v) => h - 1 - ((v - min) / span) * (h - 2);
   const line = points.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
   const stroke = rising ? "var(--pos)" : "var(--neg)";
-  return `<svg class="cx-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true" focusable="false">
-    <path d="${line}L${w},${h}L0,${h}Z" fill="${stroke}" fill-opacity=".12"/>
+  return `<svg class="${className}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+    ${filled ? `<path d="${line}L${w},${h}L0,${h}Z" fill="${stroke}" fill-opacity=".12"/>` : ""}
     <path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.5"
           vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`;
@@ -1569,7 +2180,7 @@ function cryptoCard(s, spark) {
       <span class="cx-name">${esc(s.name || "")}</span>
     </div>
     <div class="cx-price">${fmtPrice(price)}</div>
-    ${cryptoSparkSvg(spark?.points, sparkRising)}
+    ${sparkSvg(spark?.points, sparkRising)}
     <div class="cx-sub">
       ${chg == null ? '<span class="cx-dim">—</span>'
         : `<span class="sig-dir ${dir}">${chg.percent >= 0 ? "+" : ""}${chg.percent.toFixed(2)}%</span>`}
