@@ -179,9 +179,16 @@ export class AlpacaClient implements AlpacaMarketDataClient {
   }
 
   async getBars(request: BarsRequest): Promise<MarketBar[]> {
-    const out: MarketBar[] = [];
     const feed = request.feed ?? this.feed;
     const adjustment = request.adjustment ?? this.adjustment;
+    if (request.symbols.length === 0) return [];
+    // Several symbols at once is one request, not one per symbol. The watchlist
+    // overview asks for every saved ticker on every load, and the digest asks
+    // for the union of everyone's — serialised, that is minutes of round trips
+    // for data the API is happy to return in a single page.
+    if (request.symbols.length > 1) return this.getBarsBatched(request, feed, adjustment);
+
+    const out: MarketBar[] = [];
     for (const symbol of request.symbols) {
       let pageToken: string | undefined;
       do {
@@ -203,6 +210,48 @@ export class AlpacaClient implements AlpacaMarketDataClient {
         }
         pageToken = body.next_page_token ?? undefined;
       } while (pageToken);
+    }
+    return out;
+  }
+
+  /**
+   * The multi-symbol bars endpoint: `{ bars: { AAPL: [...], MSFT: [...] } }`,
+   * paginated across the whole set rather than per symbol.
+   *
+   * Chunked because the symbol list travels in the query string, and capped by
+   * page count so a mis-specified window cannot loop forever on a feed that
+   * keeps handing back a token.
+   */
+  private async getBarsBatched(
+    request: BarsRequest,
+    feed: AlpacaFeed,
+    adjustment: string,
+  ): Promise<MarketBar[]> {
+    const out: MarketBar[] = [];
+    const CHUNK = 100;
+    const MAX_PAGES = 50;
+    for (let i = 0; i < request.symbols.length; i += CHUNK) {
+      const chunk = request.symbols.slice(i, i + CHUNK);
+      let pageToken: string | undefined;
+      let pages = 0;
+      do {
+        const { body }: { body: any } = await this.request(this.dataUrl, "/v2/stocks/bars", {
+          symbols: chunk.join(","),
+          timeframe: request.timeframe,
+          start: request.start,
+          end: request.end,
+          limit: request.limit ?? 10000,
+          adjustment,
+          feed,
+          page_token: pageToken,
+        });
+        for (const [symbol, rows] of Object.entries(body.bars ?? {})) {
+          for (const b of (rows as any[]) ?? []) {
+            out.push(toBar(symbol, b, request.timeframe, adjustment));
+          }
+        }
+        pageToken = body.next_page_token ?? undefined;
+      } while (pageToken && ++pages < MAX_PAGES);
     }
     return out;
   }

@@ -18,8 +18,9 @@ CLI binary: **`transcripts`**.
 
 ## Live
 
-- **Web dashboard + PWA:** https://advis0r.up.railway.app (Watchlist / Search /
-  Signals / About; installable). API root at `/api`.
+- **Web dashboard + PWA:** https://advis0r.up.railway.app (Discover / Watchlist
+  / Search / Signals / Crypto / About; installable). Every tab is a real path —
+  `/watchlist`, `/search` — so it can be linked to. API root at `/api`.
 - Deployed on Railway (Bun, `src/server.ts`), backed by the same Turso database
   the CLI uses.
 
@@ -402,12 +403,59 @@ The pages need no JavaScript — the price history is inline SVG — so they wor
 a crawler, a link preview, or a text browser. The interactive candlestick view
 stays in the app's modal, one click away.
 
-In the app, watchlist rows link to `/ticker/<SYMBOL>` (so middle-click and
-"open in new tab" work) but open the modal on click. The modal shows the
-snapshot age, a permalink, and — for watchlist tickers — a **↻ Regenerate**
-button. Regenerating refreshes the report's *data* and is free; re-running the
+In the app, watchlist rows link straight to `/stocks/<SYMBOL>`, so a ticker is
+somewhere you can send someone rather than a modal that leaves the URL alone.
+Discover cards still open the modal, which shows the snapshot age, a permalink,
+and — for watchlist tickers — a **↻ Regenerate** button. Regenerating refreshes the report's *data* and is free; re-running the
 LLM is the separate, credit-metered **Re-run AI** button, so a free action never
 silently spends a credit.
+
+## The watchlist dashboard
+
+The saved watchlist lives at **`/watchlist`** — a path, not a fragment, so it
+can be linked to, bookmarked, crawled and reloaded. Every tab is a path now
+(`/discover`, `/watchlist`, `/search`, `/signals`, `/about`); the older
+`/#watchlist` form is rewritten to the path on arrival, so existing links keep
+working. The server already answers an unknown path with the app shell, so the
+routing needed no new server route.
+
+The tab is a dashboard rather than a list of links:
+
+| Layer | What it shows |
+|---|---|
+| Six summary tiles | Count and how many are priced · last session's average move with the up/down split · equal-weight change over the window against SPY · best and worst mover · average score |
+| One line chart | The watchlist, equal-weight and rebased to 100, drawn against SPY on the same base. Hovering reports both lines at that session |
+| A sortable table | Ticker, company, note, price, 1D/1W/1M/window change, a sparkline, score, distance from the 52-week high, and the date it was saved |
+
+Sort, filter, risk-class and window live in the URL as well as in
+`localStorage`: the address bar makes a configured table shareable, storage
+makes it the way you left it. `/watchlist?sort=range&dir=desc&q=ai&range=1Y`
+opens already arranged.
+
+```
+GET /api/watchlist/overview?range=1M|3M|6M|1Y   (signed in; 401 otherwise)
+  -> { range, asOf, source, items[], stats, index }
+```
+
+Three rules shape the payload, and they are the reason it is a separate
+endpoint from `/api/watchlist`:
+
+- **One upstream fetch for the whole list.** Bars for every saved ticker plus
+  the benchmark come back in a single batched request, cached for ten minutes
+  and shared across viewers, so a 200-ticker watchlist is not 200 round trips
+  per load. Adding a ticker fetches that ticker, not the list.
+- **Nothing is invented.** A ticker the provider has no bars for stays on the
+  list, is reported as unpriced and is named in `stats.missing` — it is never
+  filled in from its stored report price. A period longer than the history
+  available is `null`, not extrapolated.
+- **The freshness is part of the answer.** Daily bars are end-of-session data,
+  so the payload carries the date of the last bar it used, and the page prints
+  it. The equal-weight line names the tickers it covers and the ones it left
+  out for want of history over the window.
+
+Losing the overview never costs the list: it is fetched alongside the
+membership rather than instead of it, and the tab falls back to the plain rows
+when market data is unavailable.
 
 ## Email digests
 
