@@ -364,6 +364,44 @@ above Apple Hospitality REIT, and KO above Coca-Cola Consolidated.
 | `symbols find <query>` | Look up a ticker by name or symbol |
 | `symbols status` | Directory size and freshness |
 
+## Search: transcripts, the web, and a pasted link
+
+The Search tab takes one box and works out what you meant.
+
+**Paste a URL** and the page is read back to you: title, publisher and source
+tier, author, date, the phrases it keeps using, the tickers it names, and any
+feeds it advertises. Retrieval is the same code the news pipeline uses, so the
+same rules apply — `robots.txt` is honoured, a publisher that blocks automated
+access is reported as blocked, and no body text is ever invented.
+
+**Type a phrase** and *Auto* searches the indexed transcripts and the open web
+together; *News* adds dates and publishers. Alongside the results you get the
+things a list of links does not tell you: Google's **related searches**, the
+**recurring phrases** shared across the titles that came back, and the
+**niches** those results cluster into. Every one of them is clickable, so
+following a thread never means retyping it.
+
+```bash
+curl "localhost:8080/api/web?q=ai+infrastructure&kind=web"
+curl "localhost:8080/api/web?q=SoundHound&kind=news&time=last_week"
+curl "localhost:8080/api/parse?url=https://example.com/story"
+```
+
+Phrases and niches are computed by **document frequency** — a phrase scores by
+how many separate results contain it, so one long article repeating its own
+keyword twelve times cannot invent a trend. No LLM is involved; the whole thing
+is deterministic and free to run.
+
+Two costs are worth knowing about. Web and news search is **ValueSERP**, one
+credit per page out of a monthly bucket shared with other properties, so
+identical queries are cached and each IP is throttled; without
+`VALUESERP_API_KEY` the tab still searches transcripts and still parses a URL,
+and `/api/web` answers 503 rather than pretending. And `/api/parse` fetches a
+URL chosen by an anonymous caller, so the target is checked first: http(s)
+only, standard ports only, and the hostname must resolve exclusively to public
+addresses — a name pointing at `169.254.169.254` or `10.0.0.5` is refused
+before any request is made.
+
 ## Report pages
 
 Every ticker that has been looked at has a report at **`/ticker/<SYMBOL>`** — a

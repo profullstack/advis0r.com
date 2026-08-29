@@ -7,7 +7,16 @@ const esc = (s) =>
 
 async function api(path) {
   const res = await fetch(path);
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) {
+    // The API explains its refusals — out of credits, throttled, not
+    // configured. Throwing the bare status threw that explanation away and
+    // every caller rendered "failed (503)".
+    let detail = "";
+    try { detail = (await res.json())?.error || ""; } catch { /* not JSON */ }
+    const err = new Error(detail || `${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 
@@ -378,24 +387,283 @@ $("#wl-topic").addEventListener("keydown", (e) => e.key === "Enter" && runWatchl
 // Picking a suggestion from the datalist fires an 'input' change → run it.
 $("#wl-topic").addEventListener("change", () => runWatchlist());
 
-/* ---- Search ---- */
+/* ---- Search ----
+   One box, three jobs, and what you type decides which:
+
+     - a URL     -> fetch that page and describe it
+     - a phrase  -> indexed transcripts and the open web, side by side
+     - either, with a mode picked -> just the one you asked for
+
+   Web and news come from a metered search API. The server caches identical
+   queries and throttles per IP, so the only thing this side has to get right
+   is saying plainly when a budget — not a lack of results — is the reason the
+   page is empty. */
+
+/**
+ * Mirror of the server's `looksLikeUrl`. Auto has to decide which endpoint to
+ * call before it calls one, so the test lives on both sides; keep them in step
+ * (src/research/page.ts).
+ */
+function looksLikeUrl(input) {
+  const s = String(input || "").trim();
+  if (!s || /\s/.test(s)) return false;
+  if (/^https?:\/\//i.test(s)) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return false;
+  return /^[\w-]+(\.[\w-]+)*\.[a-z]{2,24}(:\d+)?([/?#]|$)/i.test(s);
+}
+
+/** A titled block. Returns "" for empty content so callers can just concatenate. */
+function sect(title, inner, note) {
+  if (!inner) return "";
+  const sub = note ? `<span class="sect-note">${esc(note)}</span>` : "";
+  return `<section class="sect"><h3>${esc(title)}${sub}</h3>${inner}</section>`;
+}
+
+/** Clickable phrases. Accepts plain strings or {phrase, count}. */
+function phraseChips(list) {
+  if (!list || !list.length) return "";
+  return `<div class="chips">${list
+    .map((p) => {
+      const label = typeof p === "string" ? p : p.phrase;
+      const count = typeof p === "string" ? 0 : p.count;
+      const n = count > 1 ? `<span class="chip-n">${count}</span>` : "";
+      return `<button type="button" class="chip chip-btn" data-q="${esc(label)}">${esc(label)}${n}</button>`;
+    })
+    .join("")}</div>`;
+}
+
+function questionList(questions) {
+  if (!questions || !questions.length) return "";
+  return `<div class="qlist">${questions
+    .slice(0, 8)
+    .map((q) => `<button type="button" class="qitem chip-btn" data-q="${esc(q)}">${esc(q)}</button>`)
+    .join("")}</div>`;
+}
+
+/** A niche is a recurring phrase plus who is writing about it. */
+function nicheList(niches) {
+  if (!niches || !niches.length) return "";
+  return `<div class="niches">${niches
+    .map((n) => {
+      const shown = (n.hosts || []).slice(0, 3).join(", ");
+      const more = (n.hosts || []).length > 3 ? ` +${n.hosts.length - 3}` : "";
+      return `<button type="button" class="niche chip-btn" data-q="${esc(n.label)}"><span class="niche-label">${esc(n.label)}</span><span class="niche-meta">${n.count} result${n.count === 1 ? "" : "s"} · ${esc(shown)}${esc(more)}</span></button>`;
+    })
+    .join("")}</div>`;
+}
+
+function sourceChips(sources) {
+  if (!sources || !sources.length) return "";
+  return `<div class="chips">${sources
+    .map(
+      (s) =>
+        `<span class="chip tier-${Number(s.tier)}" title="${esc(s.tierLabel || "")}">${esc(s.host)}<span class="chip-n">${s.count}</span></span>`,
+    )
+    .join("")}</div>`;
+}
+
+function webResultRows(results) {
+  return results
+    .map(
+      (r) => `<div class="res">
+      <div class="meta"><span class="t">${esc(r.publisher || r.host)}</span>${r.publishedAt ? `<span>${esc(String(r.publishedAt).slice(0, 10))}</span>` : ""}<span class="tier tier-${Number(r.tier)}">${esc(r.tierLabel || "")}</span></div>
+      <a class="res-title" href="${esc(r.url)}" target="_blank" rel="noopener nofollow">${esc(r.title || r.url)}</a>
+      ${r.snippet ? `<div class="txt">${esc(r.snippet)}</div>` : ""}
+      <div class="res-actions"><button type="button" class="chip chip-btn" data-parse="${esc(r.url)}">⌖ parse this page</button><a class="chip" href="${esc(r.url)}" target="_blank" rel="noopener nofollow">open ↗</a></div>
+    </div>`,
+    )
+    .join("");
+}
+
+function webHtml(data) {
+  const label = data.kind === "news" ? "News" : "Web";
+  const results = data.results || [];
+  if (!results.length && !(data.trending || []).length) {
+    return sect(label, `<div class="empty">No ${label.toLowerCase()} results for “${esc(data.query)}”.</div>`);
+  }
+  // Credits are shown because this is the one search on the site that costs
+  // money; a reader watching it fall knows why it might stop working.
+  const note = [
+    `${results.length} result${results.length === 1 ? "" : "s"}`,
+    data.cached ? "cached" : null,
+    Number.isFinite(data.creditsRemaining) ? `${Number(data.creditsRemaining).toLocaleString()} credits left` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return [
+    sect("Trending searches", phraseChips(data.trending || []), "what else is searched around this"),
+    sect("Recurring phrases", phraseChips(data.phrases || []), "language shared across these titles"),
+    sect("Niches", nicheList(data.niches || [])),
+    sect(label, `<div class="results">${webResultRows(results)}</div>`, note),
+    sect("Questions", questionList(data.questions || [])),
+    sect("Publishers", sourceChips(data.sources || [])),
+  ].join("");
+}
+
+function parsedPageHtml(p) {
+  const m = p.meta || {};
+  const line = [
+    m.siteName || p.host,
+    m.author,
+    m.publishedAt ? String(m.publishedAt).slice(0, 10) : null,
+    p.wordCount ? `${Number(p.wordCount).toLocaleString()} words` : null,
+  ].filter(Boolean);
+
+  const tickers = (p.tickers || []).length
+    ? sect(
+        "Tickers named",
+        // Real links, not buttons: a ticker found in an article is worth
+        // copying, opening in a tab, and sharing. The document-level `.tlink`
+        // handler still intercepts a plain click.
+        `<div class="chips">${p.tickers
+          .map(
+            (t) =>
+              `<a class="chip chip-btn tlink" href="/stocks/${encodeURIComponent(t.symbol)}" data-ticker="${esc(t.symbol)}">${esc(t.symbol)}${t.name ? ` · ${esc(t.name)}` : ""}${t.hasReport ? " ✓" : ""}</a>`,
+          )
+          .join("")}</div>`,
+        "✓ has a stored report",
+      )
+    : "";
+
+  const feeds = (m.feeds || []).length
+    ? sect(
+        "Feeds",
+        `<div class="chips">${m.feeds
+          .map((f) => `<a class="chip" href="${esc(f)}" target="_blank" rel="noopener nofollow">${esc(f)}</a>`)
+          .join("")}</div>`,
+      )
+    : "";
+
+  const blocked = p.blockedReason
+    ? `<div class="hint">Body not read: ${esc(p.blockedReason)}. Headline and publisher metadata only — nothing here is invented.</div>`
+    : "";
+
+  const card = `<div class="res page-card">
+    <div class="meta"><span class="t">${esc(p.host)}</span><span class="tier tier-${Number(p.tier)}">${esc(p.tierLabel || "")}</span>${p.cached ? "<span>cached</span>" : ""}</div>
+    <a class="res-title" href="${esc(p.url)}" target="_blank" rel="noopener nofollow">${esc(m.title || p.url)}</a>
+    ${line.length ? `<div class="meta">${line.map((b) => `<span>${esc(b)}</span>`).join("")}</div>` : ""}
+    ${m.description ? `<div class="txt">${esc(m.description)}</div>` : ""}
+    ${p.excerpt ? `<div class="txt excerpt">${esc(p.excerpt)}</div>` : ""}
+    ${blocked}
+    <div class="res-actions"><button type="button" class="chip chip-btn" data-q="${esc(m.title || "")}">search the web for this ↗</button><a class="chip" href="${esc(p.url)}" target="_blank" rel="noopener nofollow">open original ↗</a></div>
+  </div>`;
+
+  return [
+    sect("Page", card),
+    tickers,
+    sect("Recurring phrases", phraseChips(p.phrases || []), "the page in its own words"),
+    (m.keywords || []).length ? sect("Publisher keywords", phraseChips(m.keywords), "declared by the site") : "",
+    (m.headings || []).length
+      ? sect(
+          "Outline",
+          `<div class="qlist">${m.headings.slice(0, 12).map((h) => `<div class="qitem">${esc(h)}</div>`).join("")}</div>`,
+        )
+      : "",
+    feeds,
+  ].join("");
+}
+
+async function transcriptsSection(q, sole) {
+  try {
+    const data = await api(`/api/search?q=${encodeURIComponent(q)}&limit=30`);
+    const rows = data.results || [];
+    if (!rows.length) {
+      return sole ? `<div class="empty">No transcript matches for “${esc(q)}”.</div>` : "";
+    }
+    const inner = rows
+      .map(
+        (x) =>
+          `<div class="res"><div class="meta"><span class="t tlink" data-ticker="${esc(x.ticker || "")}">${esc(x.ticker || "?")}</span><span>${esc(x.event_date || "")}</span><span>${esc(x.speaker || "")}</span></div><div class="txt">${esc((x.text || "").slice(0, 320))}…</div></div>`,
+      )
+      .join("");
+    return sect("Transcripts", `<div class="results">${inner}</div>`, `${rows.length} segment${rows.length === 1 ? "" : "s"}`);
+  } catch (e) {
+    return sect("Transcripts", `<div class="empty">Transcript search failed (${esc(e.message)}).</div>`);
+  }
+}
+
+async function webSection(q, kind, time) {
+  const label = kind === "news" ? "News" : "Web";
+  try {
+    const params = new URLSearchParams({ q, kind });
+    if (time) params.set("time", time);
+    return webHtml(await api(`/api/web?${params}`));
+  } catch (e) {
+    const why =
+      e.status === 402
+        ? "Web search credits are exhausted for this month."
+        : e.status === 503
+          ? "Web search is not configured on this deployment."
+          : e.status === 429
+            ? e.message
+            : `${label} search failed (${esc(e.message)}).`;
+    return sect(label, `<div class="empty">${esc(why)}</div>`);
+  }
+}
+
+async function renderParse(input) {
+  const out = $("#search-results");
+  out.innerHTML = `<div class="spinner"></div>`;
+  try {
+    out.innerHTML = parsedPageHtml(await api(`/api/parse?url=${encodeURIComponent(input)}`));
+  } catch (e) {
+    out.innerHTML = `<div class="empty">${esc(e.message || "That page could not be read.")}</div>`;
+  }
+}
+
 async function runSearch() {
   const q = $("#sq").value.trim();
   const out = $("#search-results");
   if (!q) return;
+  const mode = $("#sq-mode") ? $("#sq-mode").value : "auto";
+  const time = $("#sq-time") ? $("#sq-time").value : "";
+
+  if (mode === "auto" && looksLikeUrl(q)) return renderParse(q);
+  if (mode === "url") return renderParse(q);
+
   out.innerHTML = `<div class="spinner"></div>`;
-  try {
-    const data = await api(`/api/search?q=${encodeURIComponent(q)}&limit=30`);
-    const r = data.results || [];
-    out.innerHTML = r.length
-      ? r.map((x) => `<div class="res"><div class="meta"><span class="t tlink" data-ticker="${esc(x.ticker || "")}">${esc(x.ticker || "?")}</span><span>${esc(x.event_date || "")}</span><span>${esc(x.speaker || "")}</span></div><div class="txt">${esc((x.text || "").slice(0, 320))}…</div></div>`).join("")
-      : `<div class="empty">No matches for “${esc(q)}”.</div>`;
-  } catch (e) {
-    out.innerHTML = `<div class="empty">Search failed (${esc(e.message)}).</div>`;
+  if (mode === "web" || mode === "news") {
+    out.innerHTML = await webSection(q, mode, time);
+    return;
   }
+  if (mode === "transcripts") {
+    out.innerHTML = await transcriptsSection(q, true);
+    return;
+  }
+
+  // Auto over a phrase: both sources at once. Neither waits on the other, and
+  // a web failure (no key, no credits) still leaves the transcripts standing.
+  const [transcripts, web] = await Promise.all([
+    transcriptsSection(q, false),
+    webSection(q, "web", time),
+  ]);
+  out.innerHTML = transcripts + web || `<div class="empty">No matches for “${esc(q)}”.</div>`;
 }
+
 $("#sq-run").addEventListener("click", runSearch);
 $("#sq").addEventListener("keydown", (e) => e.key === "Enter" && runSearch());
+if ($("#sq-mode")) $("#sq-mode").addEventListener("change", () => $("#sq").value.trim() && runSearch());
+if ($("#sq-time")) $("#sq-time").addEventListener("change", () => $("#sq").value.trim() && runSearch());
+
+// Every phrase, question and niche in the results is a new search, and every
+// result is a page that can be parsed — the point of the tab is following the
+// thread without retyping it. `.tlink` is left to the document handler.
+$("#search-results").addEventListener("click", (e) => {
+  const parse = e.target.closest("[data-parse]");
+  if (parse) {
+    e.preventDefault();
+    $("#sq").value = parse.dataset.parse;
+    renderParse(parse.dataset.parse);
+    return;
+  }
+  const again = e.target.closest("[data-q]");
+  if (again && again.dataset.q) {
+    e.preventDefault();
+    $("#sq").value = again.dataset.q;
+    runSearch();
+  }
+});
 
 /* ---- Signals ---- */
 async function runSignals() {
