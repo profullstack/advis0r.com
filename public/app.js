@@ -513,10 +513,13 @@ function parsedPageHtml(p) {
   const tickers = (p.tickers || []).length
     ? sect(
         "Tickers named",
+        // Real links, not buttons: a ticker found in an article is worth
+        // copying, opening in a tab, and sharing. The document-level `.tlink`
+        // handler still intercepts a plain click.
         `<div class="chips">${p.tickers
           .map(
             (t) =>
-              `<button type="button" class="chip chip-btn tlink" data-ticker="${esc(t.symbol)}">${esc(t.symbol)}${t.name ? ` · ${esc(t.name)}` : ""}${t.hasReport ? " ✓" : ""}</button>`,
+              `<a class="chip chip-btn tlink" href="/stocks/${encodeURIComponent(t.symbol)}" data-ticker="${esc(t.symbol)}">${esc(t.symbol)}${t.name ? ` · ${esc(t.name)}` : ""}${t.hasReport ? " ✓" : ""}</a>`,
           )
           .join("")}</div>`,
         "✓ has a stored report",
