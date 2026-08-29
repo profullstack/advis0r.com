@@ -10,6 +10,8 @@
  *   GET /health                          -> liveness probe
  *   GET /api/stats                       -> index coverage counts
  *   GET /api/search?q=...&limit=..       -> FTS over indexed transcript segments
+ *   GET /api/web?q=..&kind=web|news      -> web/news search: titles, phrases, niches
+ *   GET /api/parse?url=..                -> describe one pasted URL
  *   GET /api/signals?ticker=..           -> extracted signals for a ticker
  *   GET /api/tickers                     -> tickers present in the index
  *   GET /api/discover?topic=..&provider= -> ranked watchlist (offline by default)
@@ -37,6 +39,8 @@ import { startDigestScheduler } from "./digest/run.ts";
 import { handleReportRoute } from "./reports/routes.ts";
 import { loadReport, normalizeSymbol, saveReport } from "./reports/store.ts";
 import { handleLookupRoute } from "./symbols/routes.ts";
+import { handleResearchRoute } from "./research/routes.ts";
+import { SerpClient } from "./research/serp.ts";
 import { cryptoDeepLinkRedirect, handleCryptoRoute } from "./crypto/routes.ts";
 import { cryptoSitemapEntries } from "./crypto/page.ts";
 import { SUPPORTED_PAIRS } from "./crypto/pairs.ts";
@@ -60,6 +64,11 @@ const coinpay = new CoinPayClient({
   businessId: config.secrets.coinpayBusinessId,
   webhookSecret: config.secrets.coinpayWebhookSecret,
 });
+// Interactive web/news search behind the Search tab. Optional: without a key
+// the tab still searches transcripts and still parses a pasted URL, and
+// /api/web answers 503 rather than pretending.
+const serp = new SerpClient({ apiKey: config.secrets.valueSerpApiKey });
+
 const authDeps = {
   db,
   mailer,
@@ -435,6 +444,9 @@ const server = Bun.serve({
             "POST /api/report/regenerate": "rebuild one snapshot (watchlist members only)",
             "GET /api/discover?topic=&provider=offline&horizon=2&limit=": "ranked watchlist",
             "GET /api/lookup?q=&limit=": "find a ticker by company name (e.g. q=rivian -> RIVN)",
+            "GET /api/web?q=&kind=web|news&pages=&time=":
+              "web or news search: results, related searches, recurring phrases, niches",
+            "GET /api/parse?url=": "fetch one URL and describe it: title, publisher, phrases, tickers",
             "GET /api/watchlist": "your saved tickers (requires sign-in); ?format=csv downloads them",
             "GET /api/watchlist/overview?range=1M|3M|6M|1Y":
               "the same tickers priced: per-row changes, sparkline and score, summary statistics, and an equal-weight index against SPY",
@@ -838,6 +850,10 @@ const server = Bun.serve({
       // shadowed, and so a report page can offer suggestions on a miss.
       const lookupResponse = await handleLookupRoute(req, p, { db });
       if (lookupResponse) return lookupResponse;
+
+      // Web/news search and pasted-URL parsing (/api/web, /api/parse).
+      const researchResponse = await handleResearchRoute(req, p, { db, serp });
+      if (researchResponse) return researchResponse;
 
       const reportResponse = await handleReportRoute(req, p, {
         db,

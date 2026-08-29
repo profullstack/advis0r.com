@@ -109,9 +109,24 @@
       <!-- Search -->
       <section class="view" data-view="search">
         <div class="controls">
-          <input id="sq" type="search" placeholder="Full-text search transcripts (e.g. hosting agreement)" autocomplete="off" />
+          <input id="sq" type="search" placeholder="Paste a URL, or search — transcripts, the web and news" autocomplete="off" />
+          <select id="sq-mode" aria-label="Where to search">
+            <option value="auto">Auto</option>
+            <option value="transcripts">Transcripts</option>
+            <option value="web">Web</option>
+            <option value="news">News</option>
+            <option value="url">Parse URL</option>
+          </select>
+          <select id="sq-time" aria-label="Time period">
+            <option value="">Any time</option>
+            <option value="last_day">Past day</option>
+            <option value="last_week">Past week</option>
+            <option value="last_month">Past month</option>
+            <option value="last_year">Past year</option>
+          </select>
           <button id="sq-run" class="primary">Search</button>
         </div>
+        <p class="hint">Paste a link and it is read back to you: title, publisher, date, the phrases it keeps using, and any tickers it names. Type a phrase and <strong>Auto</strong> searches the indexed transcripts and the open web together — <strong>News</strong> adds dates and publishers, with related searches, recurring phrases and the niches the results fall into. Web and news come from a metered search API, so identical queries are cached.</p>
         <div id="search-results" class="results"></div>
       </section>
 
