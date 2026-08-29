@@ -199,6 +199,9 @@ const rows = () => $$(".wl-table tbody tr").map((r: any) => r.dataset.ticker);
 const cell = (ticker: string, nth: number) =>
   $$(`.wl-table tbody tr`).find((r: any) => r.dataset.ticker === ticker)?.children[nth]?.textContent?.trim();
 
+/** When set, overview responses block on this until the test resolves it. */
+let overviewGate: Promise<void> | null = null;
+
 async function loadPage(where = "/watchlist") {
   pageErrors = [];
   watchlistRequests = [];
@@ -216,10 +219,13 @@ async function loadPage(where = "/watchlist") {
   win.LightweightCharts = null;
   win.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   win.alert = () => {};
+  overviewGate = null;
   win.fetch = async (input: any, init: any = {}) => {
     const u = String(input?.url ?? input);
     const method = String(init.method ?? "GET");
     if (u.includes("/api/watchlist")) watchlistRequests.push({ method, url: u, body: init.body });
+    // Lets a test hold one overview request open and act while it is in flight.
+    if (u.includes("/api/watchlist/overview") && overviewGate) await overviewGate;
     return {
       ok: true, status: 200,
       json: async () => respond(u),
@@ -412,6 +418,45 @@ describe("the range control", () => {
     expect(watchlistRequests.some((r) => r.url.includes("range=1Y"))).toBe(true);
     expect(cell("NVDA", 6)).toBe("+140.0%");
     expect($$(".wl-sort").find((b: any) => b.dataset.sort === "range").textContent).toContain("1Y");
+  });
+
+  test("a range chosen while a request is in flight is honoured, not dropped", async () => {
+    // The in-flight guard used to `return` early, so this second choice was
+    // discarded and the table kept the old window's numbers under the new
+    // window's label. Same defect a shared `?range=` link hit on load.
+    let release = () => {};
+    overviewGate = new Promise<void>((r) => { release = r; });
+
+    click($$("#wl-ranges button").find((b: any) => b.dataset.range === "1Y"));
+    await sleep(20); // 1Y is now in flight and blocked on the gate
+    click($$("#wl-ranges button").find((b: any) => b.dataset.range === "6M"));
+
+    overviewGate = null;
+    release();
+    await sleep(120);
+
+    expect(watchlistRequests.some((r) => r.url.includes("range=6M"))).toBe(true);
+    expect($$("#wl-ranges button").find((b: any) => b.classList.contains("on")).dataset.range).toBe("6M");
+  });
+
+  test("a refresh asked for during a request is re-run, even at the same range", async () => {
+    // Not every refresh is a range change: adding a ticker reprices the table
+    // too. Dropping one of those leaves the new row permanently unpriced, so
+    // the in-flight request is repeated rather than the request discarded.
+    const overviews = () => watchlistRequests.filter((r) => r.url.includes("/overview")).length;
+    let release = () => {};
+    overviewGate = new Promise<void>((r) => { release = r; });
+
+    win.dispatchEvent(new win.Event("advis0r:auth-changed"));
+    await sleep(20);
+    const during = overviews();
+    win.dispatchEvent(new win.Event("advis0r:auth-changed")); // arrives mid-flight
+
+    overviewGate = null;
+    release();
+    await sleep(120);
+
+    expect(overviews()).toBeGreaterThan(during);
   });
 });
 

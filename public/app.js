@@ -701,7 +701,6 @@ async function boot() {
   // Restore the tab from the URL. `replace` rather than push, so arriving at
   // /#watchlist rewrites the address bar to /watchlist without leaving a
   // fragment entry behind for Back to land on.
-  restoreWatchlistPrefs();
   showView(viewFromLocation() ?? "discover", { replace: true });
   runWatchlist();
   // Deep link from a digest email: /?ticker=NVDA opens that stock's detail.
@@ -1438,6 +1437,8 @@ let wlView = { ...WL_DEFAULTS };
 let wlItems = [];        // saved rows: {ticker, note, createdAt}
 let wlOverview = null;   // the priced payload, or null before it lands
 let wlLoadingOverview = false;
+/** A load was asked for while one was in flight; honour it when that finishes. */
+let wlOverviewStale = false;
 /** A one-off message (an import result, an error) shown ahead of the prices. */
 let wlNotice = "";
 
@@ -1458,6 +1459,13 @@ function restoreWatchlistPrefs() {
   if (!WL_RANGES.includes(wlView.range)) wlView.range = WL_DEFAULTS.range;
   if (wlView.dir !== "asc" && wlView.dir !== "desc") wlView.dir = WL_DEFAULTS.dir;
 }
+
+// Restored here, at module scope, rather than inside boot(). boot() reaches it
+// only after awaiting /health and /api/stats, and the session resolving fires
+// `advis0r:auth-changed` -> openWatchlistTab() well before that — so a link
+// carrying `?range=1Y` used to issue its first fetch on the default window.
+// Nothing may read wlView before it reflects the URL.
+restoreWatchlistPrefs();
 
 function persistWatchlistPrefs() {
   try { localStorage.setItem(WL_STORE_KEY, JSON.stringify(wlView)); } catch { /* ignore */ }
@@ -1965,20 +1973,43 @@ async function loadMyWatchlist() {
  * market request, it can fail on its own, and losing it must never cost the
  * list of what is saved.
  */
+/**
+ * Fetch the priced overview for the window currently selected.
+ *
+ * Requests are **coalesced, not dropped**. The guard here used to return early
+ * while a request was in flight, which lost whichever range was chosen during
+ * that window: the table went on showing the previous window's numbers under
+ * the new window's label. Two ways in, both real —
+ *
+ *   - opening a shared link like `/watchlist?range=1Y`, because the session
+ *     resolving fires a default-range load before the URL has been read; and
+ *   - clicking 1Y while the 3M request is still outstanding.
+ *
+ * So the loop re-runs whenever the selected range no longer matches the one
+ * just fetched, and the last write wins.
+ */
 async function loadWatchlistOverview() {
-  if (wlLoadingOverview) return;
+  if (wlLoadingOverview) { wlOverviewStale = true; return; }
   wlLoadingOverview = true;
   try {
-    const res = await fetch(`/api/watchlist/overview?range=${encodeURIComponent(wlView.range)}`, {
-      credentials: "same-origin",
-    });
-    if (!res.ok) throw new Error(String(res.status));
-    const data = await res.json();
-    if (!data || !Array.isArray(data.items)) return;
-    wlOverview = data;
-    renderWatchlist();
-  } catch {
-    // Keep whatever is already on screen; the summary line says what is known.
+    let range;
+    do {
+      wlOverviewStale = false;
+      range = wlView.range;
+      try {
+        const res = await fetch(`/api/watchlist/overview?range=${encodeURIComponent(range)}`, {
+          credentials: "same-origin",
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        if (data && Array.isArray(data.items)) {
+          wlOverview = data;
+          renderWatchlist();
+        }
+      } catch {
+        // Keep whatever is already on screen; the summary line says what is known.
+      }
+    } while (wlOverviewStale || wlView.range !== range);
   } finally {
     wlLoadingOverview = false;
   }
