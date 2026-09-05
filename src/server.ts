@@ -19,6 +19,7 @@
  *   GET /*                               -> static assets / SPA shell
  */
 import { join, normalize } from "node:path";
+import { createGateway } from "@profullstack/x402-gateway";
 import { loadConfig } from "./config.ts";
 import { getDb, migrate } from "./db/index.ts";
 import { buildRegistry, getAiProvider } from "./registry.ts";
@@ -407,12 +408,35 @@ async function candidateTickers(topic: string | null, limit: number): Promise<st
   }
 }
 
+/**
+ * Training crawlers (GPTBot, ClaudeBot, CCBot, meta-externalagent, Bytespider,
+ * Applebot-Extended) pay by the day over x402 (@profullstack/x402-gateway).
+ * People, search engines and retrieval crawlers pass through untouched.
+ */
+const crawlGateway = createGateway({
+  siteUrl: process.env.SITE_URL ?? "https://advis0r.com",
+  siteName: "advis0r",
+  coinpay: { apiKey: process.env.COINPAY_X402_KEY },
+  payTo: process.env.CRAWL_PAY_TO,
+  contact: "mailto:anthony@profullstack.com",
+});
+
 const server = Bun.serve({
   port,
   idleTimeout: 60,
   async fetch(req) {
     const url = new URL(req.url);
     const p = url.pathname;
+
+    // Crawl gateway first: a refused training crawler gets 402 (or the sales
+    // page at /crawl) before anything below runs.
+    const refused = await crawlGateway.handle(req);
+    if (refused) return refused;
+    if (p === "/robots.txt") {
+      return new Response(crawlGateway.robotsTxt({ disallow: ["/api/"] }), {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
 
     // Canonicalize: strip a leading "www." from the host on every request.
     const host = req.headers.get("host") ?? "";
