@@ -23,7 +23,7 @@ export interface SymbolRow {
   assetClass?: string;
   status?: string;
   tradable?: boolean;
-  source: "alpaca" | "yahoo";
+  source: "alpaca" | "yahoo" | "nichedb";
 }
 
 export interface SymbolMatch {

@@ -25,6 +25,7 @@ import { getDb, migrate } from "./db/index.ts";
 import { buildRegistry, getAiProvider } from "./registry.ts";
 import { analyzeTicker } from "./pipeline/analyze.ts";
 import { refreshTickerNews } from "./pipeline/news-refresh.ts";
+import { nichedbMarketsFromEnv } from "./providers/nichedb-markets.ts";
 import { calculateIndicators, scoreTechnicalSetup } from "./technical/indicators.ts";
 import { buildEvidence } from "./evidence/builder.ts";
 import { composeScore, classifyRisk } from "./scoring/score.ts";
@@ -102,6 +103,16 @@ console.log(
   }`,
 );
 
+// Shared market data from nichedb.dev (NICHEDB_MARKETS=1): daily bars and SEC
+// fundamentals for a report build, the market-news wire for a news refresh,
+// and the symbol directory for `symbols sync`. Every read falls back to the
+// live provider it replaced when the mirror has nothing, so a stopped mirror
+// costs a log line, not a report. Off, no nichedb request is ever made.
+const nichedb = nichedbMarketsFromEnv(process.env, {
+  onMiss: (what, why) => console.error(`[nichedb] ${what} miss, using live provider: ${why}`),
+});
+console.log(`nichedb: ${nichedb ? `on (${nichedb.client.baseUrl})` : "off — set NICHEDB_MARKETS=1 to read shared market data"}`);
+
 const port = Number(process.env.PORT ?? 8080);
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
 
@@ -122,11 +133,22 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
   const start = new Date(Date.now() - 400 * 86_400_000).toISOString();
 
   let bars: Awaited<ReturnType<typeof registry.alpaca.getBars>> = [];
+  let barsSource: string | undefined;
   let snapshot: Awaited<ReturnType<typeof registry.alpaca.getSnapshots>>[number] | undefined;
   let asset: Awaited<ReturnType<typeof registry.alpaca.getAssets>>[number] | undefined;
   let marketError: string | undefined;
   try {
-    bars = await registry.alpaca.getBars({ symbols: [sym], timeframe: "1Day", start, end: asOf });
+    // Bars: the nichedb window first when the switch is on, the live
+    // Alpaca→Yahoo path when it has no item or one older than five days.
+    // Snapshots stay live either way — nichedb carries no trades or quotes, so
+    // the price, its timestamp and the delayed flag are the provider's.
+    const mirrored = await nichedb?.bars(sym, { start, end: asOf });
+    if (mirrored) {
+      bars = mirrored.bars;
+      barsSource = `nichedb (${mirrored.feed})`;
+    } else {
+      bars = await registry.alpaca.getBars({ symbols: [sym], timeframe: "1Day", start, end: asOf });
+    }
     [snapshot] = await registry.alpaca.getSnapshots([sym]);
     [asset] = await registry.alpaca.getAssets([sym]);
   } catch (err) {
@@ -140,7 +162,10 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
   let facts: Awaited<ReturnType<typeof registry.fundamentals.getCompanyFacts>>;
   let factsError: string | undefined;
   try {
-    facts = await registry.fundamentals.getCompanyFacts(sym, asOf);
+    // The mirrored companyfacts first (same concepts, same derivations, see
+    // fundamentalsToFacts); live SEC when nichedb has no item for the ticker.
+    // The filings list is not read here and stays a live SEC call elsewhere.
+    facts = (await nichedb?.facts(sym, asOf)) ?? (await registry.fundamentals.getCompanyFacts(sym, asOf));
   } catch (err) {
     factsError = String(err).slice(0, 300);
     // `source` names what produced these facts; "unavailable" is the honest
@@ -263,6 +288,8 @@ async function tickerDetail(symbol: string): Promise<Record<string, unknown>> {
     delayed: snapshot?.delayed ?? true,
     // True per-response provenance: the feed on the snapshot we actually used.
     marketSource: snapshot?.feed ?? registry.marketSource,
+    // Where the daily bars came from when it was not the snapshot's provider.
+    barsSource: barsSource ?? registry.marketSource,
     marketError,
     factsError,
     facts,

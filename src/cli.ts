@@ -496,8 +496,28 @@ symbols
     await withApp(async ({ db, registry }) => {
       const { fetchAlpacaDirectory } = await import("./symbols/providers.ts");
       const { upsertSymbols, directoryAge } = await import("./symbols/directory.ts");
+      const { nichedbMarketsFromEnv } = await import("./providers/nichedb-markets.ts");
       const before = await directoryAge(db);
       console.log(`Directory before: ${before.count} symbol(s)`);
+
+      // NICHEDB_MARKETS=1: walk nichedb's `kind=symbol` mirror from the stored
+      // cursor — the whole directory the first time, only what moved after
+      // that — and only reach for the Alpaca asset list when nichedb fails.
+      const nichedb = nichedbMarketsFromEnv();
+      if (nichedb) {
+        const { syncSymbolsFromNichedb } = await import("./symbols/nichedb-sync.ts");
+        try {
+          const r = await syncSymbolsFromNichedb(db, nichedb.client, { onProgress: (m) => console.log(`  ${m}`) });
+          const after = await directoryAge(db);
+          console.log(
+            `nichedb: ${r.items} item(s) over ${r.pages} page(s)${r.since ? ` since ${r.since}` : " (full walk)"}, ` +
+              `wrote ${r.written} symbol(s). Directory now: ${after.count}. Cursor: ${r.cursor ?? "none"}.`,
+          );
+          return;
+        } catch (err) {
+          console.error(`nichedb symbol mirror unavailable, falling back to Alpaca: ${String(err).slice(0, 200)}`);
+        }
+      }
 
       let rows: Awaited<ReturnType<typeof fetchAlpacaDirectory>> = [];
       try {

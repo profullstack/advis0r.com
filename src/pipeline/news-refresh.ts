@@ -21,6 +21,7 @@
 import type { Client } from "@libsql/client";
 import type { AppConfig } from "../config.ts";
 import { NewsProvider } from "../providers/news/index.ts";
+import { nichedbMarketsFromEnv, type NichedbMarkets } from "../providers/nichedb-markets.ts";
 import { ingest } from "./ingest.ts";
 
 export interface NewsRefreshOptions {
@@ -34,6 +35,12 @@ export interface NewsRefreshOptions {
   useValueSerp?: boolean;
   /** Only consider articles published on/after this ISO date. */
   from?: string;
+  /**
+   * The shared market-news mirror to consult before the RSS feeds. Resolved
+   * from `NICHEDB_MARKETS` when not given; pass `null` to force the RSS-only
+   * path regardless of the environment.
+   */
+  nichedb?: NichedbMarkets | null;
   onProgress?: (message: string) => void;
 }
 
@@ -103,12 +110,22 @@ export async function refreshTickerNews(
     return base;
   }
 
+  // Default window: a quarter of coverage is what a 1-2 quarter horizon needs.
+  const from = opts.from ?? new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+
+  // The shared wire first, when the switch is on: one keyless request for the
+  // ticker's whole window, dated and attributed, before any RSS feed is read.
+  // The feeds still run after it for anything the wire did not carry.
+  const nichedb = opts.nichedb === undefined ? nichedbMarketsFromEnv() : opts.nichedb;
+  const sinceDays = Math.max(1, Math.ceil((Date.now() - Date.parse(from)) / 86_400_000));
+
   const provider = new NewsProvider({
     downloadsDir: config.downloadsDir,
     // Deliberately blank unless asked: RSS discovery is free, ValueSERP is not,
     // and this runs on a user-facing click.
     valueSerpKey: opts.useValueSerp ? config.secrets.valueSerpApiKey : "",
     perTicker: opts.perTicker ?? 8,
+    discover: nichedb ? (t) => nichedb.newsHits(t, { sinceDays }) : undefined,
   });
   const name = await companyNameFor(db, ticker);
   if (name) provider.setCompanyNames(new Map([[ticker, name]]));
@@ -121,10 +138,9 @@ export async function refreshTickerNews(
   });
   provider.setKnownHeadlines(titles.rows.map((r) => String(r.title ?? "")));
 
-  opts.onProgress?.(`Searching news for ${name ? `${name} (${ticker})` : ticker}`);
-
-  // Default window: a quarter of coverage is what a 1-2 quarter horizon needs.
-  const from = opts.from ?? new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+  opts.onProgress?.(
+    `Searching news for ${name ? `${name} (${ticker})` : ticker}${nichedb ? " (nichedb wire first)" : ""}`,
+  );
 
   const run = ingest(
     db,

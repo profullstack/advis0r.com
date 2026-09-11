@@ -326,6 +326,27 @@ environment variables (see `.env.example`):
 | `RESEND_API_KEY` / `MAILGUN_API_KEY` | Transactional + digest email transport |
 | `APP_URL` | Public base URL used for links in emails |
 | `DIGEST_SCHEDULER` | `0` disables the built-in 04:00 ET digest scheduler |
+| `NICHEDB_MARKETS` | `1` reads shared market data from nichedb.dev (below) |
+| `NICHEDB_URL` | Another nichedb deployment (default `https://nichedb.dev`) |
+
+### Shared market data (nichedb.dev)
+
+With `NICHEDB_MARKETS=1` the site reads what every site needs from
+[nichedb.dev](https://nichedb.dev)'s public `markets` collection instead of
+fetching it itself: no key, one request per read, and the same shapes the rest
+of the app already consumes.
+
+| Read | nichedb item | Falls back to |
+|---|---|---|
+| Daily bars for a report build | `kind=history&tags=symbol:<sym>` (last 400 bars) | Alpaca → Yahoo, when there is no item or its last bar is older than 5 days |
+| Company facts for a report build | `kind=fundamentals&tags=symbol:<sym>` | Live SEC companyfacts |
+| Symbol directory (`symbols sync`) | `kind=symbol`, paged with a stored `since=` cursor | Alpaca asset list |
+| News refresh, before the RSS feeds | `kind=market-news&tags=<sym>` (90-day window) | The RSS feeds still run for anything the wire lacks |
+
+What stays live regardless: snapshots (latest trade and quote — nichedb has no
+quotes, so the price on a report is always the provider's), the SEC filings
+list, the per-miss Yahoo symbol search, and ValueSERP. Off, no request to
+nichedb is ever made.
 
 ## Ticker lookup
 
