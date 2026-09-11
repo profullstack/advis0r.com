@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS symbols (
   asset_class   TEXT,
   status        TEXT,                    -- active | inactive
   tradable      INTEGER NOT NULL DEFAULT 1,
-  source        TEXT NOT NULL,           -- alpaca | yahoo
+  source        TEXT NOT NULL,           -- alpaca | yahoo | nichedb
   updated_at    TEXT NOT NULL,
   -- Name in its match form: lowercased with punctuation collapsed to spaces, so
   -- "coca cola" finds The Coca-Cola Company. Stored rather than computed per
@@ -518,6 +518,16 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
   id            TEXT PRIMARY KEY,
   bucket        TEXT NOT NULL,            -- e.g. "login:a@b.com" / "reset:1.2.3.4"
   created_at    TEXT NOT NULL
+);
+
+-- Where a nichedb.dev mirror walk left off (NICHEDB_MARKETS=1). One row per
+-- walk, keyed by what is mirrored: `symbols.since` holds the newest
+-- `updated_at` seen on the last complete walk of `kind=symbol`, so the next
+-- sync asks nichedb only for what moved.
+CREATE TABLE IF NOT EXISTS nichedb_cursor (
+  key           TEXT PRIMARY KEY,
+  value         TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
 );
 
 -- Helpful indexes

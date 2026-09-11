@@ -42,6 +42,14 @@ export interface NewsProviderOptions {
    * appears alongside the ticker (see `isAboutSubject`).
    */
   requireSubject?: boolean;
+  /**
+   * Hits to consider before the RSS feeds: a shared source that already holds
+   * dated, publisher-attributed stories for the ticker (nichedb's market-news
+   * wire when `NICHEDB_MARKETS` is on). They go through the same subject
+   * check, headline dedupe, tiering and per-ticker cap as every other hit, and
+   * take the first places in it, so the feeds only add what this did not.
+   */
+  discover?: (ticker: string, from?: string) => Promise<NewsHit[]>;
 }
 
 /**
@@ -125,6 +133,16 @@ export class NewsProvider extends BaseTranscriptProvider {
     for (const ticker of tickers) {
       const hits: NewsHit[] = [];
       const name = this.companyNames.get(ticker);
+
+      // 0. A shared mirror, when one is wired: already dated and attributed,
+      // and one request for the ticker's whole window.
+      if (this.options.discover) {
+        try {
+          hits.push(...(await this.options.discover(ticker, query.from)));
+        } catch {
+          /* the mirror is an accelerator, not a precondition */
+        }
+      }
 
       // 1. Keyless per-ticker headline feed — cheapest broad coverage.
       try {

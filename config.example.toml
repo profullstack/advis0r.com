@@ -1,5 +1,14 @@
 # transcript-search config (PRD §23). Copy to ~/.config/transcripts/config.toml
 # Secrets (API keys, DB auth token) go in the environment, NOT here.
+#
+# Shared market data is also an environment switch, not a TOML key:
+#   NICHEDB_MARKETS=1   read daily bars, SEC fundamentals, the symbol directory
+#                       and the market-news wire from nichedb.dev (keyless),
+#                       falling back to the live Alpaca/Yahoo/SEC path below
+#                       whenever nichedb has nothing fresh for a ticker.
+#   NICHEDB_URL=        another nichedb deployment (default https://nichedb.dev).
+# The [alpaca] section still governs snapshots (latest trade/quote), which
+# nichedb does not carry, and every fallback read.
 
 database = "~/.local/share/transcripts/transcripts.sqlite"
 downloads = "~/.local/share/transcripts/downloads"
