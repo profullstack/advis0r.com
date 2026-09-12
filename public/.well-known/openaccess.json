@@ -1,0 +1,29 @@
+{
+  "openaccess": "0.1",
+  "name": "advis0r",
+  "url": "https://advis0r.com",
+  "operator": "https://logicsrc.com/.well-known/openprofile.md",
+  "redirect_uris": [
+    "https://advis0r.com/api/v1/openaccess/callback"
+  ],
+  "jwks": {
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "kid": "Hu_Is92Y0ALF",
+        "x": "kfdhlUqSvS0XEAf0JrEzpsyFVvAdjEPDnvS5GllsF_I",
+        "alg": "EdDSA",
+        "use": "sig"
+      }
+    ]
+  },
+  "scopes": {},
+  "honours": [
+    "profullstack.com/all-access"
+  ],
+  "webhooks": "https://advis0r.com/api/v1/openaccess/events",
+  "hubs": [
+    "https://openaccess.logicsrc.com"
+  ]
+}
