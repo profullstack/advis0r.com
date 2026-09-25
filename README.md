@@ -21,7 +21,7 @@ CLI binary: **`transcripts`**.
 - **Web dashboard + PWA:** https://advis0r.up.railway.app (Discover / Watchlist
   / Search / Signals / Crypto / About; installable). Every tab is a real path —
   `/watchlist`, `/search` — so it can be linked to. API root at `/api`.
-- Deployed on Railway (Bun, `src/server.ts`), backed by the same Turso database
+- Deployed on dev2 (Bun, `src/server.ts`), backed by the same Postgres database
   the CLI uses.
 
 ## Status
@@ -31,7 +31,7 @@ What is **fully implemented and working end-to-end**:
 
 - **Live transcript ingestion** via SEC EDGAR full-text search (`transcripts
   sync "<topic>"`) — keyless; indexes real 8-K/EX-99 exhibits & prepared remarks
-  into Turso with FTS5 and deterministic signal extraction.
+  into Postgres (full-text search on a tsvector column) and deterministic signal extraction.
 - **Offline analysis provider** (`--provider offline`): zero-dependency,
   grounded, reproducible `StockAnalysis` from extracted signals — `discover`,
   `analyze-company`, and the web watchlist produce real ranked output with no
@@ -49,8 +49,10 @@ What is **fully implemented**:
 - Bun CLI with the full command surface (`init`, `search`, `discover`,
   `analyze-company`, `compare`, `screen`, `models`, `providers`, `stats`,
   `export`, `backtest`).
-- libSQL / Turso storage with the full schema + **FTS5** (works locally as an
-  embedded file or against a remote Turso DB).
+- Postgres storage through `@profullstack/libsql-pg` (the `@libsql/client`
+  surface over a pg pool; `src/db/schema.pg.sql`), with full-text search on a
+  generated tsvector column. Locally an embedded libSQL file with **FTS5**
+  (`src/db/schema.sql`) still works; `src/db/fts.ts` builds the right predicate.
 - **Alpaca Market Data** client (snapshots, trades, quotes, bars, assets,
   calendar) with provenance tagging (feed, delayed flag, request id).
 - **Local, deterministic technical-indicator engine** (SMA/EMA/RSI/MACD/
@@ -320,8 +322,8 @@ environment variables (see `.env.example`):
 | `OPENAI_API_KEY` | OpenAI analysis provider |
 | `ANTHROPIC_API_KEY` | Anthropic analysis provider |
 | `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | Alpaca Market Data |
-| `DATABASE_URL` | `file:./data/transcripts.sqlite` or `libsql://…` (Turso) |
-| `DATABASE_AUTH_TOKEN` | Turso auth token (remote only) |
+| `DATABASE_URL` | `postgres://…` (production) or `file:./data/transcripts.sqlite` (local) |
+| `DATABASE_AUTH_TOKEN` | unused since the move to Postgres (was the Turso token) |
 | `SEC_USER_AGENT` | Required descriptive UA for SEC EDGAR |
 | `RESEND_API_KEY` / `MAILGUN_API_KEY` | Transactional + digest email transport |
 | `APP_URL` | Public base URL used for links in emails |

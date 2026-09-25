@@ -22,6 +22,7 @@ import { join, normalize } from "node:path";
 import { createGateway } from "@profullstack/x402-gateway";
 import { loadConfig } from "./config.ts";
 import { getDb, migrate } from "./db/index.ts";
+import { segmentsMatch } from "./db/fts.ts";
 import { buildRegistry, getAiProvider } from "./registry.ts";
 import { analyzeTicker } from "./pipeline/analyze.ts";
 import { refreshTickerNews } from "./pipeline/news-refresh.ts";
@@ -401,25 +402,13 @@ async function serveStatic(pathname: string): Promise<Response> {
   return json({ error: "not found" }, 404);
 }
 
-/**
- * Turn a raw user query into a safe FTS5 MATCH expression. Each alphanumeric
- * token is quoted (so hyphens, operators, quotes, colons etc. can't break the
- * parser) and prefix-matched for typeahead-style results. Returns null if the
- * query has no usable tokens.
- */
-function ftsQuery(raw: string): string | null {
-  const tokens = (raw.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length >= 2 || /\d/.test(t));
-  if (!tokens.length) return null;
-  return tokens.map((t) => `"${t}"*`).join(" ");
-}
-
 async function candidateTickers(topic: string | null, limit: number): Promise<string[]> {
   try {
-    const match = topic ? ftsQuery(topic) : null;
+    const match = topic ? segmentsMatch(db, topic) : null;
     if (match) {
       const rs = await db.execute({
-        sql: `SELECT DISTINCT ticker FROM segments_fts WHERE segments_fts MATCH ? LIMIT ?`,
-        args: [match, limit],
+        sql: `SELECT DISTINCT ticker FROM segments_fts WHERE ${match.where} LIMIT ?`,
+        args: [match.arg, limit],
       });
       const t = rs.rows.map((r) => String(r.ticker)).filter(Boolean);
       if (t.length) return t;
@@ -545,13 +534,13 @@ const server = Bun.serve({
         const q = url.searchParams.get("q");
         if (!q) return json({ error: "missing ?q=" }, 400);
         const limit = Math.min(50, Number(url.searchParams.get("limit") ?? 20) || 20);
-        const match = ftsQuery(q);
+        const match = segmentsMatch(db, q);
         let rows: any[] = [];
         if (match) {
           const rs = await db.execute({
             sql: `SELECT text, speaker, ticker, event_date FROM segments_fts
-                  WHERE segments_fts MATCH ? LIMIT ?`,
-            args: [match, limit],
+                  WHERE ${match.where} LIMIT ?`,
+            args: [match.arg, limit],
           });
           rows = rs.rows;
         }

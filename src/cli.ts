@@ -5,6 +5,7 @@
 import { Command } from "commander";
 import { loadConfig, configPath, type AppConfig } from "./config.ts";
 import { getDb, migrate, closeDb } from "./db/index.ts";
+import { segmentsMatch } from "./db/fts.ts";
 import { buildRegistry } from "./registry.ts";
 import { analyzeTicker } from "./pipeline/analyze.ts";
 import { renderTerminal, renderMarkdown, renderJson } from "./ranking/report.ts";
@@ -120,14 +121,20 @@ program
     await withApp(async ({ db }) => {
       const limit = Number(opts.limit) || 20;
       try {
+        const match = segmentsMatch(db, query);
+        if (!match) {
+          console.log("No searchable words in the query.");
+          return;
+        }
+        // CAST(? AS TEXT): Postgres cannot infer the type of a bare parameter in `? IS NULL`.
         const rs = await db.execute({
           sql: `SELECT text, speaker, ticker, event_date
                 FROM segments_fts
-                WHERE segments_fts MATCH ?
-                  AND (? IS NULL OR event_date >= ?)
-                  AND (? IS NULL OR event_date <= ?)
+                WHERE ${match.where}
+                  AND (CAST(? AS TEXT) IS NULL OR event_date >= ?)
+                  AND (CAST(? AS TEXT) IS NULL OR event_date <= ?)
                 LIMIT ?`,
-          args: [query, opts.from ?? null, opts.from ?? null, opts.to ?? null, opts.to ?? null, limit],
+          args: [match.arg, opts.from ?? null, opts.from ?? null, opts.to ?? null, opts.to ?? null, limit],
         });
         if (rs.rows.length === 0) {
           console.log("No matches. (Ingest transcripts with `transcripts sync` first.)");
@@ -1142,9 +1149,11 @@ async function resolveCandidateTickers(
   if (fromOpt?.length) return fromOpt.slice(0, limit);
   // Otherwise derive from indexed transcript signals via FTS on the topic.
   try {
+    const match = segmentsMatch(db, topic);
+    if (!match) return [];
     const rs = await db.execute({
-      sql: `SELECT DISTINCT ticker FROM segments_fts WHERE segments_fts MATCH ? LIMIT ?`,
-      args: [topic, limit],
+      sql: `SELECT DISTINCT ticker FROM segments_fts WHERE ${match.where} LIMIT ?`,
+      args: [match.arg, limit],
     });
     return rs.rows.map((r) => String(r.ticker)).filter(Boolean);
   } catch {
