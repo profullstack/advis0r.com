@@ -59,14 +59,16 @@ export async function buildEvidence(
   // Transcript / news signals from the DB (populated by `sync` ingestion).
   // Boilerplate is excluded here rather than at query time everywhere else:
   // this is the gate between the corpus and anything the model ever sees.
+  // CAST(? AS TEXT): Postgres cannot infer the type of a bare parameter in `? IS NULL`
+  // (SQLite does not care); the cast is valid on both.
   const rs = await db.execute({
     sql: `SELECT id, quote, source_url, event_date, signal_type, direction, speaker,
                  speaker_title, source_tier, provenance, start_ms
           FROM signals
           WHERE ticker = ?
             AND COALESCE(is_boilerplate, 0) = 0
-            AND (? IS NULL OR event_date >= ?)
-            AND (? IS NULL OR event_date <= ?)
+            AND (CAST(? AS TEXT) IS NULL OR event_date >= ?)
+            AND (CAST(? AS TEXT) IS NULL OR event_date <= ?)
           ORDER BY event_date DESC
           LIMIT 100`,
     args: [ticker, opts.from ?? null, opts.from ?? null, opts.to ?? null, opts.to ?? null],
@@ -108,8 +110,8 @@ export async function buildEvidence(
             WHERE t.primary_ticker = ?
               AND d.provider_id = 'news'
               AND COALESCE(d.source_tier, 3) < 3
-              AND (? IS NULL OR COALESCE(d.published_at, '') >= ?)
-              AND (? IS NULL OR COALESCE(d.published_at, '') <= ?)
+              AND (CAST(? AS TEXT) IS NULL OR COALESCE(d.published_at, '') >= ?)
+              AND (CAST(? AS TEXT) IS NULL OR COALESCE(d.published_at, '') <= ?)
             ORDER BY d.published_at DESC
             LIMIT 15`,
       args: [ticker, opts.from ?? null, opts.from ?? null, opts.to ?? null, opts.to ?? null],

@@ -10,6 +10,7 @@
  * harness can drive the full LLM ranking when desired.
  */
 import type { Client } from "@libsql/client";
+import { segmentsMatch } from "../db/fts.ts";
 import type { AppConfig } from "../config.ts";
 import type { buildRegistry } from "../registry.ts";
 import { STRATEGY_VERSION } from "../scoring/weights.ts";
@@ -117,12 +118,15 @@ async function rankBySignalScore(
   // Candidate tickers from FTS on topic, restricted to on/before as-of.
   let tickers: string[] = [];
   try {
-    const rs = await db.execute({
-      sql: `SELECT DISTINCT ticker FROM segments_fts
-            WHERE segments_fts MATCH ? AND event_date <= ?`,
-      args: [topic, asOfDay],
-    });
-    tickers = rs.rows.map((r) => String(r.ticker)).filter(Boolean);
+    const match = segmentsMatch(db, topic);
+    if (match) {
+      const rs = await db.execute({
+        sql: `SELECT DISTINCT ticker FROM segments_fts
+              WHERE ${match.where} AND event_date <= ?`,
+        args: [match.arg, asOfDay],
+      });
+      tickers = rs.rows.map((r) => String(r.ticker)).filter(Boolean);
+    }
   } catch {
     tickers = [];
   }

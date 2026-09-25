@@ -1,26 +1,61 @@
 /**
- * Database access via @libsql/client.
+ * Database access.
  *
- * Works with both a local embedded SQLite file (DATABASE_URL=file:./...)
- * and a remote Turso database (DATABASE_URL=libsql://...). FTS5 is available
- * in both modes.
+ * Production runs on Postgres (DATABASE_URL=postgres://...) through
+ * @profullstack/libsql-pg, which keeps the @libsql/client surface this code was
+ * written against (execute / batch / transaction) and rewrites the remaining
+ * SQLite idioms per statement. Local development and the tests use an embedded
+ * libSQL file (DATABASE_URL=file:./...). Turso (libsql://) is no longer read:
+ * the data moved to Postgres in 2026-09.
  */
-import { createClient, type Client } from "@libsql/client";
+import type { Client } from "@libsql/client";
+import { createClient as createPostgresClient } from "@profullstack/libsql-pg";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { AppConfig } from "../config.ts";
+import { isPostgres } from "./fts.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const require_ = createRequire(import.meta.url);
+
+const POSTGRES_URL = /^postgres(ql)?:\/\//i;
 
 let client: Client | null = null;
+/** The URL each Postgres client was opened with; migrate() needs it for a second, DDL-only client. */
+const openedWith = new WeakMap<object, string>();
 
 export function getDb(config: AppConfig): Client {
   if (client) return client;
-  const url = config.databaseUrl;
-  const authToken = config.databaseAuthToken || undefined;
-  client = createClient({ url, authToken });
+  client = openClient(config.databaseUrl, config.databaseAuthToken || undefined);
   return client;
+}
+
+/**
+ * Open the database named by DATABASE_URL.
+ *
+ * - `postgres://` (production): @profullstack/libsql-pg over a pg pool.
+ * - `file:` (local, tests): @libsql/client, a devDependency loaded lazily so
+ *   the production image carries neither it nor its native binding.
+ * - anything else, `libsql://` included, is a configuration error and fails
+ *   here rather than writing to the wrong place.
+ */
+export function openClient(url: string, authToken?: string): Client {
+  if (POSTGRES_URL.test(url)) {
+    const pg = createPostgresClient({ url }) as unknown as Client;
+    openedWith.set(pg, url);
+    return pg;
+  }
+  if (url.startsWith("file:")) {
+    const { createClient } = require_("@libsql/client") as typeof import("@libsql/client");
+    return createClient({ url, authToken });
+  }
+  const scheme = url.split(":")[0];
+  throw new Error(
+    `DATABASE_URL must be a postgres:// URL (production) or a file: path (local); got "${scheme}:". ` +
+      "Turso/libsql:// is no longer supported: the data lives in Postgres now.",
+  );
 }
 
 /**
@@ -63,16 +98,26 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
  *
  * Order matters: tables first, then additive column migrations, then indexes —
  * an index may reference a column that only exists after the ALTER pass.
+ *
+ * Postgres reads schema.pg.sql, already in its own dialect, through a second
+ * client that sends SQL as-is (`dialect: 'postgres'`), so the statement
+ * rewriter never touches DDL that is not SQLite's. SQLite reads schema.sql.
  */
 export async function migrate(db: Client): Promise<void> {
-  const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
+  const postgres = isPostgres(db);
+  const schema = readFileSync(join(__dirname, postgres ? "schema.pg.sql" : "schema.sql"), "utf8");
   const statements = splitSqlStatements(schema);
   const indexes = statements.filter((s) => /^CREATE\s+INDEX/i.test(s));
   const rest = statements.filter((s) => !/^CREATE\s+INDEX/i.test(s));
 
-  await db.batch(rest, "write");
-  await ensureColumns(db);
-  if (indexes.length) await db.batch(indexes, "write");
+  const ddl = postgres ? createPostgresClient({ url: openedWith.get(db)!, dialect: "postgres", pool: { max: 1 } }) : db;
+  try {
+    await (ddl as Client).batch(rest, "write");
+    await ensureColumns(db);
+    if (indexes.length) await (ddl as Client).batch(indexes, "write");
+  } finally {
+    if (ddl !== db) (ddl as Client).close();
+  }
 }
 
 /** Idempotently add any missing columns listed in ADDED_COLUMNS. */
@@ -81,7 +126,13 @@ export async function ensureColumns(db: Client): Promise<string[]> {
   for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
     let existing: Set<string>;
     try {
-      const info = await db.execute(`PRAGMA table_info(${table})`);
+      // Postgres has no PRAGMA (libsql-pg answers it with no rows); ask the catalogue.
+      const info = isPostgres(db)
+        ? await db.execute({
+            sql: "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?",
+            args: [table],
+          })
+        : await db.execute(`PRAGMA table_info(${table})`);
       existing = new Set(info.rows.map((r) => String(r.name)));
     } catch {
       continue; // table does not exist yet; the CREATE pass will handle it
