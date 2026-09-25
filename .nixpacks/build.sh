@@ -1,0 +1,1 @@
+docker build /home/anthony/src/profullstack/advis0r.com/.claude/worktrees/dev2-advis0r.com-9lp250u2 -f /home/anthony/src/profullstack/advis0r.com/.claude/worktrees/dev2-advis0r.com-9lp250u2/.nixpacks/Dockerfile -t 329e7615-e02b-4682-9f6f-346ffadb1ef9 --build-arg CI=true --build-arg NIXPACKS_METADATA=node --build-arg NODE_ENV=production --build-arg NPM_CONFIG_PRODUCTION=false
