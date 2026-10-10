@@ -19,6 +19,7 @@
     "bun": ">=1.1.0"
   },
   "dependencies": {
+    "@profullstack/footer": "latest",
     "@profullstack/libsql-pg": "^0.1.4",
     "@profullstack/x402-gateway": "^0.7.0",
     "commander": "^12.1.0",

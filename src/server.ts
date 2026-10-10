@@ -49,6 +49,7 @@ import { cryptoSitemapEntries } from "./crypto/page.ts";
 import { SUPPORTED_PAIRS } from "./crypto/pairs.ts";
 import { resolveOne } from "./symbols/lookup.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
+import { footerHtml } from "@profullstack/footer";
 
 const config = loadConfig();
 const db = getDb(config);
@@ -441,6 +442,31 @@ const server = Bun.serve({
   port,
   idleTimeout: 60,
   async fetch(req) {
+    return withFooter(await route(req));
+  },
+});
+
+// Every HTML page leaves a <!--pfs-footer--> slot; fill it per response with
+// the shared Profullstack footer (copyright + webring). footerHtml() renders
+// from @profullstack/footer's @latest template, cached for an hour.
+const PFS_FOOTER_SLOT = "<!--pfs-footer-->";
+async function withFooter(res: Response): Promise<Response> {
+  if (!(res.headers.get("content-type") ?? "").includes("text/html") || !res.body) return res;
+  const body = await res.text();
+  if (!body.includes(PFS_FOOTER_SLOT)) {
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+  }
+  const footer = await footerHtml({ site: "https://advis0r.com/" });
+  const headers = new Headers(res.headers);
+  headers.delete("content-length");
+  return new Response(body.replace(PFS_FOOTER_SLOT, footer), {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}
+
+async function route(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const p = url.pathname;
 
@@ -912,7 +938,6 @@ const server = Bun.serve({
     } catch (err) {
       return json({ error: String(err) }, 500);
     }
-  },
-});
+}
 
 console.log(`advis0r.com server listening on :${server.port}`);
