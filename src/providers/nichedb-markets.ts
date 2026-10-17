@@ -70,7 +70,8 @@ export interface HistoryBars {
 /**
  * A `history` item → `MarketBar[]` in the Alpaca provider's shape, oldest
  * first, cut to the window asked for. `null` when the item is missing, not a
- * history item, or its last bar is older than `HISTORY_MAX_AGE_DAYS`.
+ * history item, or its last bar is more than `HISTORY_MAX_AGE_DAYS` before the
+ * window's end (or `now`, whichever is earlier).
  */
 export function historyToBars(
   item: NichedbItem | null,
@@ -84,7 +85,12 @@ export function historyToBars(
   if (!symbol) return null;
 
   const last = String(data.last ?? data.bars[data.bars.length - 1]![0]);
-  if (!isFresh(last, now)) return null;
+  // Staleness is judged at the end of the window asked for, not the wall
+  // clock: a report built for a past date needs bars up to that date, and a
+  // mirror that has them answers it no matter how long ago that was.
+  const endAt = window.end ? Date.parse(window.end.length === 10 ? `${window.end}T00:00:00Z` : window.end) : NaN;
+  const asOf = Number.isNaN(endAt) ? now : Math.min(now, endAt);
+  if (!isFresh(last, asOf)) return null;
 
   const feed: "iex" | "sip" = data.feed === "sip" ? "sip" : "iex";
   const from = window.start?.slice(0, 10);
