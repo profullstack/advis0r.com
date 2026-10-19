@@ -49,7 +49,7 @@ import { cryptoSitemapEntries } from "./crypto/page.ts";
 import { SUPPORTED_PAIRS } from "./crypto/pairs.ts";
 import { resolveOne } from "./symbols/lookup.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
-import { footerHtml } from "@profullstack/footer";
+import { injectPitFooter, pitFooterHtml } from "./util/pit-footer.ts";
 
 const config = loadConfig();
 const db = getDb(config);
@@ -446,24 +446,16 @@ const server = Bun.serve({
   },
 });
 
-// Every HTML page leaves a <!--pfs-footer--> slot; fill it per response with
-// the shared Profullstack footer (copyright + webring). footerHtml() renders
-// from @profullstack/footer's @latest template, cached for an hour.
-const PFS_FOOTER_SLOT = "<!--pfs-footer-->";
+// Every HTML page gets the pit.world global footer (site name, Search, Ring,
+// Publish here) as the last thing in <body>, fetched server-side and cached
+// for an hour; when pit.world is unreachable the page simply goes without it.
 async function withFooter(res: Response): Promise<Response> {
   if (!(res.headers.get("content-type") ?? "").includes("text/html") || !res.body) return res;
   const body = await res.text();
-  if (!body.includes(PFS_FOOTER_SLOT)) {
-    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
-  }
-  const footer = await footerHtml({ site: "https://advis0r.com/" });
+  const html = injectPitFooter(body, await pitFooterHtml());
   const headers = new Headers(res.headers);
   headers.delete("content-length");
-  return new Response(body.replace(PFS_FOOTER_SLOT, footer), {
-    status: res.status,
-    statusText: res.statusText,
-    headers,
-  });
+  return new Response(html, { status: res.status, statusText: res.statusText, headers });
 }
 
 async function route(req: Request): Promise<Response> {
