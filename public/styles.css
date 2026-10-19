@@ -754,7 +754,11 @@ button.qitem:hover { border-color: var(--accent-2); color: var(--text); }
   color: var(--dim); font-style: italic;
 }
 
-/* Site footer: one muted line; the pit.world global footer follows it. */
+/* Site footer: one muted line; the Profullstack ring footer and the pit.world global footer follow it. */
 .site-foot { max-width: 1080px; margin: 0 auto; padding: 18px 16px; border-top: 1px solid var(--line); text-align: center; font-size: 13px; color: var(--dim); }
 .site-foot a { color: inherit; text-decoration: none; }
 .site-foot a:hover, .site-foot a:focus-visible { color: var(--accent); }
+
+/* Shared Profullstack footer (@profullstack/footer): muted like the rest of the chrome. */
+.pfs-footer { color: var(--dim); }
+.pfs-footer a:hover, .pfs-footer a:focus-visible { color: var(--accent); }
