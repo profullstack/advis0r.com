@@ -183,8 +183,9 @@ ${body}
 </main>
 <footer class="rp-foot">
   <p class="rp-disclaimer">${e(DISCLAIMER.replace(/\s+/g, " "))}</p>
-  <p>&copy; 2026 <a href="https://profullstack.com/">Profullstack, Inc.</a> · <a href="/">advis0r.com</a> · <a href="/reports">All reports</a> · <a href="/api">API</a></p>
+  <p><a href="/">advis0r.com</a> · <a href="/reports">All reports</a> · <a href="/api">API</a></p>
 </footer>
+<!--pfs-footer-->
 </body>
 </html>`;
 }
