@@ -23,7 +23,8 @@ describe("index.html", () => {
 
   test("declares one zone per placement, not a stack of banners", () => {
     const zones = [...html.matchAll(/data-ad="([^"]+)"/g)].map((m) => m[1]);
-    expect(zones).toEqual(["text_link", "banner_300x250", "auto"]);
+    // No zone pressed against the footer (standing rule): the old site-wide strip is gone.
+    expect(zones).toEqual(["text_link", "banner_300x250"]);
   });
 });
 
