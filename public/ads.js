@@ -16,7 +16,13 @@
   let resizeTimer = null;
   let authKnown = false;
 
-  const zones = () => document.querySelectorAll("[data-ad]");
+  // Every view is in the DOM at once, so only the visible view's zones are
+  // filled; otherwise the About ad would load (and meter) on the homepage.
+  const zones = () =>
+    [...document.querySelectorAll("[data-ad]")].filter((z) => {
+      const view = z.closest(".view");
+      return !view || view.classList.contains("active");
+    });
 
   function formatFor(zone) {
     const declared = zone.getAttribute("data-ad");
@@ -39,7 +45,7 @@
   }
 
   function clear() {
-    zones().forEach((zone) => {
+    document.querySelectorAll("[data-ad]").forEach((zone) => {
       zone.innerHTML = "";
       zone.removeAttribute("data-ad-format");
     });
@@ -93,6 +99,7 @@
     authKnown = true;
     sync();
   });
+  window.addEventListener("advis0r:view-changed", sync);
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(sync, 200);

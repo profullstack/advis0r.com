@@ -42,6 +42,7 @@ function viewFromLocation() {
 function showView(name, opts = {}) {
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
+  window.dispatchEvent(new CustomEvent("advis0r:view-changed", { detail: name }));
   if (opts.history !== false) {
     // The query string travels with the view: it carries the watchlist's sort,
     // filter and range, which is what makes a configured table shareable.
