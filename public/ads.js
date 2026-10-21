@@ -5,13 +5,12 @@
    is driven by the `data-ad` zones in index.html — one unit per zone, spread
    through the page, rather than a stack of banners at the end of the body.
 
-   Zones declare a format ("text_link", "banner_300x250", …) or "auto", which
-   picks the leaderboard on wide viewports and the mobile banner below it. */
+   Zones declare a format; "auto" means the low-profile text_link line. The
+   homepage (Discover view) has no zone. */
 
 (function () {
   const SLOT = "16098dd0-3e7b-4acb-9210-be85daac11f2";
   const SCRIPT_SRC = "https://crawlproof.com/ad.js";
-  const WIDE = 768;
 
   let scriptRequested = false;
   let resizeTimer = null;
@@ -22,7 +21,7 @@
   function formatFor(zone) {
     const declared = zone.getAttribute("data-ad");
     if (declared && declared !== "auto") return declared;
-    return window.innerWidth >= WIDE ? "banner_728x90" : "banner_320x50";
+    return "text_link";
   }
 
   function loadScript() {
