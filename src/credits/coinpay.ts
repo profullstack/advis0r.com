@@ -2,10 +2,12 @@
  * CoinPayPortal integration for credit purchases (PRD v3 §8).
  *
  * Payment flow:
- *   1. user picks a package  -> POST /api/credits/checkout
- *   2. we create a payment   -> CoinPayPortal returns a hosted payment URL
- *   3. user pays in crypto   -> CoinPayPortal POSTs a webhook
- *   4. we verify the signature and credit the ledger (idempotent by payment id)
+ *   1. user picks a package     -> POST /api/credits/checkout
+ *   2. we open a checkout session (POST /api/checkout/sessions) and store its
+ *      cs_ id on the purchase row
+ *   3. user pays on CoinPay's hosted page, in any coin the business holds or
+ *      PayPal -> CoinPay POSTs a webhook carrying checkout_session_id
+ *   4. we verify the signature and credit the ledger (idempotent per purchase)
  *
  * The webhook is the only path that grants credits, and it is treated as
  * untrusted input: the HMAC signature is verified before the body is parsed for
@@ -65,6 +67,46 @@ export interface CreatedPayment {
   raw: unknown;
 }
 
+/** Every checkout from this site carries this as its CoinPay property. */
+export const PAYMENT_PROPERTY = "advis0r.com";
+
+export const CHECKOUT_WINDOW_MINUTES = 60;
+
+export interface CheckoutSessionInput {
+  amountUsd: number;
+  description: string;
+  customerEmail: string;
+  accountId: string;
+  metadata: Record<string, string>;
+  successUrl: string;
+  cancelUrl: string;
+  idempotencyKey?: string;
+}
+
+export interface CreatedSession {
+  sessionId: string;
+  /** CoinPay's hosted checkout page (any coin or PayPal). */
+  url: string;
+  expiresAt?: string;
+  methods: string[];
+}
+
+/** The POST /api/checkout/sessions body. */
+export function checkoutSessionBody(input: CheckoutSessionInput): Record<string, unknown> {
+  return {
+    amount: input.amountUsd,
+    currency: "USD",
+    description: input.description,
+    customer_email: input.customerEmail,
+    account_id: input.accountId,
+    property: PAYMENT_PROPERTY,
+    metadata: input.metadata,
+    success_url: input.successUrl,
+    cancel_url: input.cancelUrl,
+    expires_in_minutes: CHECKOUT_WINDOW_MINUTES,
+  };
+}
+
 export class CoinPayClient {
   constructor(private config: CoinPayConfig) {}
 
@@ -119,6 +161,37 @@ export class CoinPayClient {
     };
   }
 
+  /** Open a hosted checkout session; the buyer picks the coin (or PayPal) on CoinPay. */
+  async createCheckoutSession(input: CheckoutSessionInput): Promise<CreatedSession> {
+    if (!this.configured) throw new Error("CoinPayPortal is not configured");
+    const res = await fetch(`${this.baseUrl}/checkout/sessions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+        ...(input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {}),
+      },
+      body: JSON.stringify(checkoutSessionBody(input)),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as Record<string, any>;
+    if (!res.ok || !body?.id || !body?.url) {
+      throw new Error(
+        `CoinPay checkout session ${res.status}: ${String(body?.code ?? "")} ${String(body?.error ?? "").slice(0, 200)}`.trim(),
+      );
+    }
+    // Only ever send buyers to CoinPay's own origin.
+    const origin = new URL(this.baseUrl).origin;
+    const url = new URL(String(body.url), origin);
+    if (url.origin !== origin) throw new Error("CoinPay checkout session returned a foreign url");
+    return {
+      sessionId: String(body.id),
+      url: url.toString(),
+      expiresAt: body.expires_at ? String(body.expires_at) : undefined,
+      methods: Array.isArray(body.methods) ? body.methods.map((m: unknown) => String((m as any)?.code ?? (m as any)?.method ?? m)) : [],
+    };
+  }
+
   async getPayment(paymentId: string): Promise<Record<string, unknown>> {
     const res = await fetch(`${this.baseUrl}/payments/${encodeURIComponent(paymentId)}`, {
       headers: { Authorization: `Bearer ${this.config.apiKey}` },
@@ -168,7 +241,7 @@ export class CoinPayClient {
 }
 
 /** Payment states CoinPayPortal reports that mean "the money arrived". */
-const CONFIRMED = new Set(["confirmed", "completed", "paid", "success", "succeeded"]);
+const CONFIRMED = new Set(["confirmed", "forwarded", "completed", "paid", "success", "succeeded"]);
 const FAILED = new Set(["failed", "cancelled", "canceled", "expired", "refunded"]);
 
 export type PaymentOutcome = "confirmed" | "failed" | "pending";
@@ -180,11 +253,36 @@ export function classifyStatus(status: unknown): PaymentOutcome {
   return "pending";
 }
 
+export interface WebhookEvent {
+  /** CoinPay payment id (or PayPal transaction id); never the event id. */
+  paymentId: string;
+  checkoutSessionId: string;
+  accountId: string;
+  type: string;
+  outcome: PaymentOutcome;
+  metadata: Record<string, unknown>;
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/** Pull the payment id and status out of a webhook body, shape-tolerantly. */
-export function parseWebhook(body: any): { paymentId: string; outcome: PaymentOutcome } {
-  const payment = body?.payment ?? body?.data ?? body ?? {};
-  const paymentId = String(payment?.id ?? payment?.payment_id ?? body?.payment_id ?? "");
-  const status = payment?.status ?? body?.status ?? body?.event ?? body?.type;
-  return { paymentId, outcome: classifyStatus(status) };
+/**
+ * Read a webhook body. CoinPay nests the payment under `data` and the top-level
+ * `id` is the EVENT id, so `data` is read first and the flat shape (older test
+ * sender) is the fallback. `forwarded` counts as paid: it follows `confirmed`
+ * and is the one CoinPay keeps retrying.
+ */
+export function parseWebhook(body: any): WebhookEvent {
+  const nested = body?.data && typeof body.data === "object" ? body.data : null;
+  const d = nested ?? body?.payment ?? body ?? {};
+  const metadata = (d?.metadata ?? body?.metadata ?? {}) as Record<string, unknown>;
+  const paymentId = String(d?.payment_id ?? (nested ? "" : d?.id ?? body?.payment_id) ?? "");
+  const type = String(body?.type ?? body?.event ?? "");
+  const status = d?.status ?? body?.status ?? (type.startsWith("payment.") ? type.slice(8) : type);
+  return {
+    paymentId,
+    checkoutSessionId: String(d?.checkout_session_id ?? metadata.checkout_session_id ?? ""),
+    accountId: String(d?.account_id ?? metadata.account_id ?? ""),
+    type,
+    outcome: classifyStatus(status),
+    metadata,
+  };
 }

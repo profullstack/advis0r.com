@@ -434,13 +434,12 @@ credits
 
 credits
   .command("buy <email> <packageId>")
-  .description("Create a CoinPayPortal payment for a credit package and print the payment URL.")
-  .option("--blockchain <chain>", "chain code, e.g. USDC_POL / ETH / BTC", "USDC_POL")
-  .action(async (email: string, packageId: string, opts) => {
+  .description("Open a CoinPay checkout (any coin or PayPal) for a credit package and print its URL.")
+  .action(async (email: string, packageId: string) => {
     await withApp(async ({ config, db }) => {
       const { CoinPayClient } = await import("./credits/coinpay.ts");
       const { findPackage } = await import("./credits/ledger.ts");
-      const { newId } = await import("./auth/crypto.ts");
+      const { openCreditCheckout } = await import("./credits/routes.ts");
       const user = await findUserByEmail(db, email);
       if (!user) return console.error(`No account for ${email}`);
       const pkg = findPackage(packageId);
@@ -454,23 +453,10 @@ credits
       if (!client.configured) {
         return console.error("CoinPayPortal is not configured (COINPAYPORTAL_API_KEY / COINPAYPORTAL_WEBHOOK_SECRET).");
       }
-      const payment = await client.createPayment({
-        amountUsd: pkg.usd,
-        blockchain: String(opts.blockchain),
-        description: `advis0r.com — ${pkg.label}`,
-        metadata: { user_id: user.id, package_id: pkg.id, credits: String(pkg.credits) },
-        webhookUrl: `${config.appUrl.replace(/\/$/, "")}/api/webhook/coinpay`,
-      });
-      await db.execute({
-        sql: `INSERT INTO credit_purchases
-              (id, user_id, payment_id, package_id, credits, amount_usd, blockchain, status, payment_url, created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        args: [newId("pur"), user.id, payment.paymentId, pkg.id, pkg.credits, pkg.usd,
-               String(opts.blockchain), "pending", payment.paymentUrl, new Date().toISOString()],
-      });
-      console.log(`Payment created for ${email}: ${pkg.label} ($${pkg.usd})`);
-      console.log(`  payment id: ${payment.paymentId}`);
-      console.log(`  pay here:   ${payment.paymentUrl}`);
+      const session = await openCreditCheckout(db, client, config.appUrl, user, pkg);
+      console.log(`Checkout opened for ${email}: ${pkg.label} ($${pkg.usd})`);
+      console.log(`  session:  ${session.sessionId}`);
+      console.log(`  pay here: ${session.url}`);
       console.log("Credits are added automatically once the payment confirms (webhook).");
     });
   });
