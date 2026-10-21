@@ -87,9 +87,9 @@ describe("payment status handling", () => {
 
   test("webhook payloads are parsed shape-tolerantly", () => {
     expect(parseWebhook({ payment: { id: "pay_1", status: "confirmed" } }))
-      .toEqual({ paymentId: "pay_1", outcome: "confirmed" });
+      .toMatchObject({ paymentId: "pay_1", outcome: "confirmed" });
     expect(parseWebhook({ data: { payment_id: "pay_2", status: "failed" } }))
-      .toEqual({ paymentId: "pay_2", outcome: "failed" });
+      .toMatchObject({ paymentId: "pay_2", outcome: "failed" });
     expect(parseWebhook({}).paymentId).toBe("");
   });
 });

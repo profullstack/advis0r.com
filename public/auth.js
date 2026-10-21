@@ -280,7 +280,7 @@ function openCredits() {
         (${creditState.spentThisPeriod} used in ${aEsc(creditState.period)}).
         One credit runs one AI analysis.</p>
       ${creditState.paymentsEnabled
-        ? `<p class="auth-sub">Top up with crypto — paid via CoinPayPortal.</p>
+        ? `<p class="auth-sub">Top up with crypto or PayPal, paid through CoinPay.</p>
            <div class="credit-pkgs">${pkgs}</div>`
         : `<p class="auth-note">Credit purchases are not available right now.</p>`}
       <div id="auth-note"></div>
@@ -299,10 +299,11 @@ async function buyCredits(packageId) {
     });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || "Could not start the payment.");
-    // The hosted CoinPayPortal page handles the actual crypto payment; credits
-    // land via the signed webhook once it confirms.
-    authNote("Opening the payment page — credits arrive once it confirms.", "ok");
-    window.open(d.paymentUrl, "_blank", "noopener");
+    // CoinPay's hosted checkout takes any coin or PayPal and sends the buyer
+    // back here; credits land via the signed webhook once it confirms.
+    authNote("Opening CoinPay checkout. Credits arrive once the payment confirms.", "ok");
+    const url = d.checkoutUrl || d.paymentUrl;
+    window.location.href = url;
   } catch (e) {
     authNote(e.message, "bad");
   }
