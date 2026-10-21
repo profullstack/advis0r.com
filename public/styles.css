@@ -336,7 +336,7 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
    Empty zones collapse to nothing, so a signed-in visitor sees no gap where
    an ad would have been. */
 .adzone:empty { display: none; }
-.adzone-line { margin: 14px 0 4px; }
+.adzone-line { margin: 8px 0; }
 .adzone-rect { display: flex; justify-content: center; margin: 0 0 18px; }
 @media (min-width: 900px) {
   /* Beside the prose on wide screens rather than stacked above it. */

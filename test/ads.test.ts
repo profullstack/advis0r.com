@@ -24,7 +24,12 @@ describe("index.html", () => {
   test("declares one zone per placement, not a stack of banners", () => {
     const zones = [...html.matchAll(/data-ad="([^"]+)"/g)].map((m) => m[1]);
     // No zone pressed against the footer (standing rule): the old site-wide strip is gone.
-    expect(zones).toEqual(["text_link", "banner_300x250"]);
+    expect(zones).toEqual(["text_link"]);
+  });
+
+  test("the homepage (Discover view) has no ad zone", () => {
+    const discover = html.slice(html.indexOf('<section class="view active" data-view="discover">'), html.indexOf('<section class="view" data-view="watchlist">'));
+    expect(discover).not.toContain("data-ad=");
   });
 });
 
