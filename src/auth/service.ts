@@ -97,6 +97,8 @@ export async function rateLimit(
 
 export interface SignupResult {
   ok: boolean;
+  /** The new account's id; absent when the address already had an account. */
+  createdUserId?: string;
   /** Present only in development when no mail transport is configured. */
   devVerifyUrl?: string;
   error?: string;
@@ -135,7 +137,7 @@ export async function signup(
     args: [id, email, await hashPassword(input.password), input.displayName ?? null, iso(), iso()],
   });
   const url = await issueEmailToken(ctx, id, "verify_email");
-  return { ok: true, devVerifyUrl: ctx.mailer.configured ? undefined : url };
+  return { ok: true, createdUserId: id, devVerifyUrl: ctx.mailer.configured ? undefined : url };
 }
 
 /** Mint a single-use token, invalidate prior ones of the same kind, and email it. */
