@@ -19,19 +19,19 @@
     "bun": ">=1.1.0"
   },
   "dependencies": {
-    "@profullstack/footer": "^0.2.4",
+    "@profullstack/footer": "^0.2.6",
     "@profullstack/libsql-pg": "^0.1.4",
-    "@profullstack/profile": "0.1.3",
-    "@profullstack/x402-gateway": "^0.11.0",
-    "commander": "^12.1.0",
-    "smol-toml": "^1.3.1",
-    "zod": "^3.23.8"
+    "@profullstack/profile": "0.1.6",
+    "@profullstack/x402-gateway": "^0.13.1",
+    "commander": "^15.0.0",
+    "smol-toml": "^1.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@libsql/client": "^0.15.0",
-    "@types/bun": "^1.1.0",
-    "@types/jsdom": "^28.0.3",
-    "jsdom": "^30.0.1",
-    "typescript": "^5.5.0"
+    "@libsql/client": "^0.18.0",
+    "@types/bun": "^1.4.4",
+    "@types/jsdom": "^30.0.0",
+    "jsdom": "^30.1.3",
+    "typescript": "^7.0.2"
   }
 }
