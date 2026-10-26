@@ -461,6 +461,80 @@ credits
     });
   });
 
+credits
+  .command("mint <credits>")
+  .description("Mint a credit code (shown once; only its hash is stored). Grants <credits> credits.")
+  .option("--label <text>", "who or what it is for", "advis0r credits")
+  .option("--monthly", "grant <credits> every calendar month instead of once")
+  .option("--months <n>", "with --monthly: how many months (default: forever)")
+  .option("--max <n>", "how many accounts may redeem it", "1")
+  .option("--expires-days <n>", "code expires after this many days")
+  .option("--by <name>", "recorded as the minter")
+  .action(async (amount: string, opts) => {
+    await withApp(async ({ db }) => {
+      const { mintCode } = await import("./credits/codes.ts");
+      const minted = await mintCode(db, {
+        credits: Number(amount),
+        label: opts.label,
+        monthly: Boolean(opts.monthly),
+        months: opts.months ? Number(opts.months) : null,
+        maxRedemptions: Number(opts.max),
+        expiresInDays: opts.expiresDays ? Number(opts.expiresDays) : null,
+        createdBy: opts.by,
+      });
+      const g = minted.grant;
+      console.log(minted.code);
+      console.log(
+        `  ${g.amount} credits${g.every === "month" ? ` a month${g.months ? ` for ${g.months} months` : ""}` : ""}, ` +
+          `${minted.maxRedemptions} redemption(s), id ${minted.id}` +
+          (minted.expiresAt ? `, expires ${new Date(minted.expiresAt).toISOString().slice(0, 10)}` : ""),
+      );
+      console.log("  Redeem at https://advis0r.com/invites#code or in the Credits panel.");
+    });
+  });
+
+credits
+  .command("codes")
+  .description("List minted credit codes (never the codes themselves).")
+  .action(async () => {
+    await withApp(async ({ db }) => {
+      const { listCodes } = await import("./credits/codes.ts");
+      for (const c of await listCodes(db)) {
+        const g = c.grant;
+        console.log(
+          `${c.id}  ${String(g.amount).padStart(6)} ${g.every === "month" ? "/mo" : "   "}  ` +
+            `${c.redemptions}/${c.maxRedemptions}  ${c.revokedAt ? "revoked " : ""}${c.label}`,
+        );
+      }
+    });
+  });
+
+credits
+  .command("revoke <codeId>")
+  .description("Withdraw a credit code. Credits already granted stay.")
+  .action(async (codeId: string) => {
+    await withApp(async ({ db }) => {
+      const { revokeCode } = await import("./credits/codes.ts");
+      await revokeCode(db, codeId);
+      console.log(`Revoked ${codeId}`);
+    });
+  });
+
+credits
+  .command("invite-quota <email> <total>")
+  .description("Set how many invites an account may create in total (default 3).")
+  .action(async (email: string, total: string) => {
+    await withApp(async ({ db }) => {
+      const { setInviteQuota } = await import("./credits/codes.ts");
+      const user = await findUserByEmail(db, email);
+      if (!user) return console.error(`No account for ${email}`);
+      const n = Number(total);
+      if (!Number.isInteger(n) || n < 0) return console.error("Total must be a whole number.");
+      await setInviteQuota(db, user.id, n);
+      console.log(`${email} may now create ${n} invites in total.`);
+    });
+  });
+
 /** Look up a user by email for the CLI's admin commands. */
 async function findUserByEmail(
   db: ReturnType<typeof getDb>,

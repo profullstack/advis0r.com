@@ -3,6 +3,9 @@
  *
  *   GET  /api/credits              -> balance, packages, recent ledger
  *   POST /api/credits/checkout     -> { packageId } -> CoinPay hosted checkout session URL
+ *   POST /api/credits/redeem       -> { code } -> redeem a credit code into this account
+ *   GET  /api/invites              -> invite quota, invites, the open ?ref= link
+ *   POST /api/invites              -> { note? } -> a new single-use invite link
  *   POST /api/webhook/coinpay      -> CoinPayPortal callback (signed, unauthenticated)
  *
  * The webhook is the only unauthenticated route here and the only one that
@@ -12,6 +15,8 @@
 import type { Client } from "@libsql/client";
 import { newId } from "../auth/crypto.ts";
 import { guardResponse, requireUser } from "../auth/routes.ts";
+import { rateLimit } from "../auth/service.ts";
+import { createInvite, inviteSummary, originFor, redeemCode } from "./codes.ts";
 import { CoinPayClient, parseWebhook, type WebhookEvent } from "./coinpay.ts";
 import {
   CREDIT_PACKAGES,
@@ -42,7 +47,8 @@ export async function handleCreditsRoute(
   deps: CreditsDeps,
 ): Promise<Response | null> {
   const isWebhook = path === WEBHOOK_PATH;
-  if (!path.startsWith("/api/credits") && !isWebhook) return null;
+  const isInvites = path === "/api/invites";
+  if (!path.startsWith("/api/credits") && !isWebhook && !isInvites) return null;
   const { db, coinpay } = deps;
 
   /* ---- webhook: unauthenticated but signed ---- */
@@ -130,6 +136,32 @@ export async function handleCreditsRoute(
     });
   }
 
+  if (path === "/api/credits/redeem" && req.method === "POST") {
+    // Codes carry 80 random bits, so this is about log noise and DB load, not guessing.
+    const limit = await rateLimit(db, `redeem:${user.id}`, { max: 20, windowMinutes: 60 });
+    if (!limit.allowed) {
+      return json({ error: `Too many tries. Try again in ${limit.retryAfterMinutes} minutes.` }, 429);
+    }
+    const body = await readBody(req);
+    const r = await redeemCode(db, user.id, body.code);
+    if (!r.ok) return json({ error: r.message, reason: r.reason }, r.reason === "invalid" ? 404 : 409);
+    return json({ ok: true, credits: r.credits, monthly: r.monthly, months: r.months, balance: r.balance });
+  }
+
+  if (isInvites) {
+    const origin = originFor(deps.appUrl, req.url);
+    if (req.method === "GET") return json(await inviteSummary(db, user.id, origin));
+    if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
+    // An invite pays both sides, so only a confirmed address hands them out.
+    if (!user.emailVerified) {
+      return json({ error: "Verify your email address to invite people.", verificationRequired: true }, 403);
+    }
+    const body = await readBody(req);
+    const r = await createInvite(db, user.id, body.note, origin);
+    if (!r.ok) return json({ error: "You have no invites left.", reason: r.reason }, 409);
+    return json(r);
+  }
+
   if (path === "/api/credits/checkout" && req.method === "POST") {
     if (!coinpay.configured) {
       return json({ error: "Credit purchases are not available right now." }, 503);
@@ -163,6 +195,15 @@ export async function handleCreditsRoute(
   }
 
   return json({ error: "not found" }, 404);
+}
+
+async function readBody(req: Request): Promise<Record<string, unknown>> {
+  try {
+    const body = await req.json();
+    return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 type Row = Record<string, unknown>;

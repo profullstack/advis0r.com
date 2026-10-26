@@ -16,6 +16,7 @@
 import type { Client } from "@libsql/client";
 import { createProfileHandlers, createProfileStore, saveSignupProfile, validateProfile } from "@profullstack/profile";
 import { Mailer } from "./email.ts";
+import { INVITE_COOKIE, REF_COOKIE, rememberSignupInvite, settleSignupInvite } from "../credits/codes.ts";
 import {
   type PublicUser,
   RATE_LIMITS,
@@ -146,6 +147,15 @@ export async function handleAuthRoute(
       await saveSignupProfile(profileStore(deps.db), result.createdUserId, body, { email }).catch((err) =>
         console.error("[auth] signup profile save failed:", (err as Error).message),
       );
+      // The invite (/i/<code>) and ?ref= this account came from, kept with the
+      // account so the verification link counts from any browser. Settled when
+      // the address is confirmed (/api/auth/verify), never before.
+      await rememberSignupInvite(
+        deps.db,
+        result.createdUserId,
+        str(body.inviteCode) || readCookie(req, INVITE_COOKIE),
+        str(body.ref) || readCookie(req, REF_COOKIE),
+      ).catch((err) => console.error("[auth] signup invite save failed:", (err as Error).message));
     }
     return json({
       ok: true,
@@ -184,7 +194,21 @@ export async function handleAuthRoute(
 
   if (path === "/api/auth/verify") {
     const result = await verifyEmail(ctx, str(body.token));
-    return result.ok ? json({ ok: true }) : json({ error: result.error }, 400);
+    if (!result.ok) return json({ error: result.error }, 400);
+    let inviteBonus = 0;
+    if (result.userId) {
+      try {
+        const settled = await settleSignupInvite(deps.db, result.userId);
+        inviteBonus = settled?.credits ?? 0;
+        if (settled?.invite) {
+          console.log(`[invites] ${result.userId}: invite ${settled.invite.ok ? "accepted" : settled.invite.reason}, bonus ${settled.bonus ?? "none"} (${inviteBonus})`);
+        }
+      } catch (err) {
+        // The address is confirmed either way; an invite problem must not undo that.
+        console.error("[invites] settle failed:", (err as Error).message);
+      }
+    }
+    return json({ ok: true, inviteBonus });
   }
 
   if (path === "/api/auth/request-reset") {

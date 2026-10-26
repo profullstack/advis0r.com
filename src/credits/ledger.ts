@@ -81,6 +81,77 @@ export async function ensureMonthlyGrant(
       now.toISOString(),
     ],
   });
+  await ensureCodeMonthlyGrants(db, userId, now);
+}
+
+/** Months from period `a` to period `b` (both "YYYY-MM"); 0 when equal. */
+export function monthsBetween(a: string, b: string): number {
+  const [ay, am] = a.split("-").map(Number);
+  const [by, bm] = b.split("-").map(Number);
+  return (by! - ay!) * 12 + (bm! - am!);
+}
+
+/**
+ * Pay this month's share of every monthly credit code the account redeemed.
+ *
+ * Same lazy, idempotent shape as the free allowance: keyed on
+ * (user, 'code_monthly', '<codeId>:<period>'), so it pays once per month however
+ * often the balance is read. The redemption month is month one; `months` NULL
+ * means the code pays every month for as long as the account exists. One-off
+ * codes are paid at redemption (see src/credits/codes.ts), not here.
+ */
+export async function ensureCodeMonthlyGrants(
+  db: Client,
+  userId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const period = currentPeriod(now);
+  const rs = await db.execute({
+    sql: `SELECT code_id, amount, months, start_period FROM credit_code_grants
+          WHERE user_id = ? AND every = 'month'`,
+    args: [userId],
+  });
+  let paid = 0;
+  for (const row of rs.rows) {
+    const index = monthsBetween(String(row.start_period), period);
+    const months = row.months == null ? null : Number(row.months);
+    if (index < 0 || (months !== null && index >= months)) continue;
+    const amount = Number(row.amount);
+    if (!(amount > 0)) continue;
+    const result = await db.execute({
+      sql: `INSERT OR IGNORE INTO credits_ledger (id, user_id, delta, reason, idem, note, created_at)
+            VALUES (?,?,?,?,?,?,?)`,
+      args: [
+        newId("cr"), userId, amount, "code_monthly", `${String(row.code_id)}:${period}`,
+        `Credit code (monthly) for ${period}`, now.toISOString(),
+      ],
+    });
+    paid += Number(result.rowsAffected ?? 0) > 0 ? amount : 0;
+  }
+  return paid;
+}
+
+/**
+ * Credit a grant from a code or an invite into the ledger, once per
+ * (user, reason, source): a retry, a double click or a crash between the
+ * package's redemption and this write can never pay twice.
+ */
+export async function creditFromSource(
+  db: Client,
+  userId: string,
+  credits: number,
+  reason: "code" | "invite_bonus",
+  source: string,
+  note: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  if (!(credits > 0)) return false;
+  const result = await db.execute({
+    sql: `INSERT OR IGNORE INTO credits_ledger (id, user_id, delta, reason, idem, note, created_at)
+          VALUES (?,?,?,?,?,?,?)`,
+    args: [newId("cr"), userId, Math.round(credits), reason, source, note, now.toISOString()],
+  });
+  return Number(result.rowsAffected ?? 0) > 0;
 }
 
 export async function getBalance(

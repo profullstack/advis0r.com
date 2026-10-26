@@ -36,6 +36,7 @@ import { guardResponse, handleAuthRoute, handleProfileRoute, requireUser } from 
 import { COLUMNS as PROFILE_COLUMNS, renderProfileFields } from "@profullstack/profile";
 import { CoinPayClient } from "./credits/coinpay.ts";
 import { handleCreditsRoute } from "./credits/routes.ts";
+import { handleInvitePages, refCookieFor } from "./credits/pages.ts";
 import { COST_PER_ANALYSIS, refundCredits, spendCredits } from "./credits/ledger.ts";
 import { handleWatchlistRoute } from "./auth/watchlist.ts";
 import { handleDigestRoute } from "./digest/routes.ts";
@@ -444,7 +445,19 @@ const server = Bun.serve({
   port,
   idleTimeout: 60,
   async fetch(req) {
-    return withFooter(await route(req));
+    const res = await withFooter(await route(req));
+    // First-touch ?ref= affiliate code, on whatever page it lands.
+    const ref = refCookieFor(req, authDeps.secureCookies);
+    if (!ref) return res;
+    try {
+      res.headers.append("set-cookie", ref);
+      return res;
+    } catch {
+      // Response.redirect() headers are immutable: copy them.
+      const headers = new Headers(res.headers);
+      headers.append("set-cookie", ref);
+      return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+    }
   },
 });
 
@@ -531,6 +544,11 @@ async function route(req: Request): Promise<Response> {
             "GET /api/watchlist": "your saved tickers (requires sign-in); ?format=csv downloads them",
             "GET /api/watchlist/overview?range=1M|3M|6M|1Y":
               "the same tickers priced: per-row changes, sparkline and score, summary statistics, and an equal-weight index against SPY",
+            "GET /api/credits": "your credit balance, packages and recent ledger (requires sign-in)",
+            "POST /api/credits/redeem": "{ code } redeem a credit code into your balance (requires sign-in)",
+            "GET /api/invites": "your invite quota, invites and ?ref= link (requires sign-in)",
+            "POST /api/invites": "{ note? } create a single-use invite link (verified accounts)",
+            "GET /i/<code>": "invite landing page",
             "GET /api/digest": "your watchlist email frequency (requires sign-in)",
             "POST /api/digest": "set frequency: daily | weekly | off",
             "GET /crypto": "crypto market data index — every crypto route is namespaced under /crypto/**",
@@ -908,6 +926,8 @@ async function route(req: Request): Promise<Response> {
       });
       if (watchlistResponse) return watchlistResponse;
 
+      const invitePage = await handleInvitePages(req, p, { db, appUrl: config.appUrl, secureCookies: authDeps.secureCookies });
+      if (invitePage) return invitePage;
       const creditsResponse = await handleCreditsRoute(req, p, { db, coinpay, appUrl: config.appUrl });
       if (creditsResponse) return creditsResponse;
 

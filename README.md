@@ -518,6 +518,22 @@ Losing the overview never costs the list: it is fetched alongside the
 membership rather than instead of it, and the tab falls back to the plain rows
 when market data is unavailable.
 
+## Credit codes and invites
+
+- **Credit codes** (`@profullstack/redeem-credits`, tables `redeem_*`): an operator mints
+  `transcripts credits mint <credits> [--monthly [--months N]] [--max N] [--expires-days N] --label "..."`;
+  the code is printed once and stored only as a hash. Redeeming (Credits panel "Have a code?",
+  `/invites#code`, or `POST /api/credits/redeem {code}`) writes the credits into `credits_ledger`,
+  once per (account, code). A monthly code is paid each calendar month by the same lazy top-up as the
+  free allowance. `transcripts credits codes` lists them, `credits revoke <id>` withdraws one.
+- **Invites** (`@profullstack/affiliates`, tables `aff_*`): three single-use links per verified account
+  at `/invites` (`GET/POST /api/invites`); `/i/<code>` remembers the code, the signup stores it with the
+  new account, and it is settled when the email is confirmed. Both sides get `INVITE_BONUS_CREDITS`
+  (default 50) once, unless the two are one mailbox, the new address is disposable, the inviter is
+  unverified or under `INVITE_MIN_INVITER_AGE_HOURS` (24) old, or already earned 10 bonuses in 30 days.
+  `?ref=<code>` on any page is a first-touch affiliate link (cookie `referral_code`), attributed on
+  confirmation. `transcripts credits invite-quota <email> <total>` hands out more invites.
+
 ## Email digests
 
 Signed-in users get a market summary of the tickers on their saved watchlist,

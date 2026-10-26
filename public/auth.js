@@ -186,6 +186,20 @@ async function doReset(token) {
 
 async function handleAuthLanding() {
   const url = new URL(location.href);
+  // /i/<code> and /invites send people here to sign up or sign in.
+  if (url.searchParams.get("signup") === "1" || url.searchParams.get("signin") === "1") {
+    const signup = url.searchParams.get("signup") === "1";
+    const invited = url.searchParams.get("invited") === "1";
+    url.searchParams.delete("signup");
+    url.searchParams.delete("signin");
+    url.searchParams.delete("invited");
+    history.replaceState({}, "", url.pathname + url.search);
+    openAuth(signup ? "signup" : "login");
+    if (signup && invited) {
+      authNote("You were invited: your bonus credits arrive when you confirm your email.", "ok");
+    }
+    return;
+  }
   const token = url.searchParams.get("token");
   if (!token) return;
 
@@ -194,10 +208,15 @@ async function handleAuthLanding() {
     const body = document.getElementById("auth-body");
     if (body) body.innerHTML = `<h2 class="auth-h">Verifying your email…</h2><div id="auth-note"></div>`;
     try {
-      await authApi("/api/auth/verify", { token });
+      const r = await authApi("/api/auth/verify", { token });
       await refreshAuth();
       if (body) body.innerHTML = `<h2 class="auth-h">Email verified</h2><div id="auth-note"></div>`;
-      authNote("Your email address is confirmed. You can sign in.", "ok");
+      authNote(
+        r.inviteBonus > 0
+          ? `Your email address is confirmed, and your invite added ${r.inviteBonus} credits. You can sign in.`
+          : "Your email address is confirmed. You can sign in.",
+        "ok",
+      );
       setTimeout(() => renderAuthForm("login"), 1500);
     } catch (e) {
       authNote(e.message, "bad");
@@ -289,6 +308,11 @@ function openCredits() {
         ? `<p class="auth-sub">Top up with crypto or PayPal, paid through CoinPay.</p>
            <div class="credit-pkgs">${pkgs}</div>`
         : `<p class="auth-note">Credit purchases are not available right now.</p>`}
+      <h3 class="auth-h">Have a code?</h3>
+      <label class="auth-l">Credit code<input id="credit-code" type="text" maxlength="48"
+        placeholder="ADV-XXXX-XXXX-XXXX-XXXX" autocomplete="off"></label>
+      <button class="primary" id="credit-redeem">Redeem</button>
+      <p class="auth-sub"><a href="/invites">Invite friends</a>: you both get bonus credits.</p>
       <div id="auth-note"></div>
     </div>`;
   document.body.appendChild(el);
@@ -315,8 +339,29 @@ async function buyCredits(packageId) {
   }
 }
 
+async function redeemCreditCode() {
+  const code = document.getElementById("credit-code")?.value.trim();
+  if (!code) return;
+  busy("credit-redeem", true, "Redeem");
+  try {
+    const d = await authApi("/api/credits/redeem", { code });
+    authNote(
+      d.monthly
+        ? `Redeemed: ${d.credits} credits a month${d.months ? ` for ${d.months} months` : ""}. Balance: ${d.balance}.`
+        : `Redeemed: ${d.credits} credits. Balance: ${d.balance}.`,
+      "ok",
+    );
+    window.dispatchEvent(new CustomEvent("advis0r:credits-changed"));
+  } catch (e) {
+    authNote(e.message, "bad");
+  } finally {
+    busy("credit-redeem", false, "Redeem");
+  }
+}
+
 document.addEventListener("click", (e) => {
   if (e.target.closest("#credits-open")) { e.preventDefault(); openCredits(); return; }
+  if (e.target.id === "credit-redeem") { e.preventDefault(); redeemCreditCode(); return; }
   const buy = e.target.closest("[data-buy]");
   if (buy) { e.preventDefault(); buyCredits(buy.dataset.buy); }
 });

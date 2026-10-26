@@ -183,14 +183,14 @@ export async function issueEmailToken(
 export async function verifyEmail(
   ctx: AuthContext,
   token: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; userId?: string; error?: string }> {
   const row = await consumeToken(ctx.db, token, "verify_email");
   if (!row) return { ok: false, error: "This verification link is invalid or has expired." };
   await ctx.db.execute({
     sql: "UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?",
     args: [iso(), iso(), row.userId],
   });
-  return { ok: true };
+  return { ok: true, userId: row.userId };
 }
 
 /** Look up, validate and atomically consume a single-use token. */

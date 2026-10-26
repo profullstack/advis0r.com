@@ -547,3 +547,36 @@ create table if not exists "user_profiles" (
 create index if not exists "user_profiles_email" on "user_profiles" (lower("email"));
 create index if not exists "user_profiles_company_domain" on "user_profiles" ("company_domain");
 
+
+-- Credit codes (@profullstack/redeem-credits, tables redeem_*) and invites
+-- (@profullstack/affiliates, tables aff_*): those packages create their own
+-- tables. These three are advis0r's side (see schema.sql).
+create table if not exists credit_code_grants (
+  user_id text NOT NULL REFERENCES users(id),
+  code_id text NOT NULL,
+  amount bigint NOT NULL,
+  every text,
+  months bigint,
+  start_period text NOT NULL,
+  created_at text NOT NULL,
+  PRIMARY KEY (user_id, code_id)
+);
+
+create table if not exists pending_invites (
+  user_id text PRIMARY KEY REFERENCES users(id),
+  invite_code text,
+  ref_code text,
+  created_at text NOT NULL
+);
+
+create table if not exists invite_bonuses (
+  invite_id text NOT NULL,
+  user_id text NOT NULL REFERENCES users(id),
+  role text NOT NULL,
+  credits bigint NOT NULL,
+  status text NOT NULL,
+  created_at text NOT NULL,
+  PRIMARY KEY (invite_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_invite_bonuses_user ON invite_bonuses(user_id, role, created_at);
