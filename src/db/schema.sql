@@ -569,3 +569,39 @@ create table if not exists "user_profiles" (
 create index if not exists "user_profiles_email" on "user_profiles" (lower("email"));
 create index if not exists "user_profiles_company_domain" on "user_profiles" ("company_domain");
 
+
+-- Credit codes (@profullstack/redeem-credits, tables redeem_*) and invites
+-- (@profullstack/affiliates, tables aff_*): those packages create their own
+-- tables. These three are advis0r's side: what a redeemed code owes this
+-- account (credits_ledger is still the only balance), the invite or ?ref= a
+-- new account signed up with until its email is confirmed, and the invite
+-- bonus claim that keeps a retry from paying twice.
+CREATE TABLE IF NOT EXISTS credit_code_grants (
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  code_id       TEXT NOT NULL,
+  amount        INTEGER NOT NULL,
+  every         TEXT,                      -- NULL = one-off, 'month' = each calendar month
+  months        INTEGER,                   -- monthly only: how many months, NULL = forever
+  start_period  TEXT NOT NULL,             -- YYYY-MM of redemption, month one
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (user_id, code_id)
+);
+
+CREATE TABLE IF NOT EXISTS pending_invites (
+  user_id       TEXT PRIMARY KEY REFERENCES users(id),
+  invite_code   TEXT,
+  ref_code      TEXT,
+  created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invite_bonuses (
+  invite_id     TEXT NOT NULL,
+  user_id       TEXT NOT NULL REFERENCES users(id),
+  role          TEXT NOT NULL,             -- invitee | inviter
+  credits       INTEGER NOT NULL,
+  status        TEXT NOT NULL,             -- pending | granted | a refusal reason
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (invite_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_invite_bonuses_user ON invite_bonuses(user_id, role, created_at);

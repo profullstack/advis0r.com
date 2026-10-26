@@ -49,13 +49,24 @@ export function openClient(url: string, authToken?: string): Client {
   }
   if (url.startsWith("file:")) {
     const { createClient } = require_("@libsql/client") as typeof import("@libsql/client");
-    return createClient({ url, authToken });
+    const local = createClient({ url, authToken });
+    openedWith.set(local, url);
+    return local;
   }
   const scheme = url.split(":")[0];
   throw new Error(
     `DATABASE_URL must be a postgres:// URL (production) or a file: path (local); got "${scheme}:". ` +
       "Turso/libsql:// is no longer supported: the data lives in Postgres now.",
   );
+}
+
+/**
+ * The DATABASE_URL a client from openClient() was opened with, or undefined for
+ * a client made elsewhere (tests build their own). Packages with their own
+ * connection (credit codes, invites) open a second one on the same database.
+ */
+export function databaseUrlOf(db: Client): string | undefined {
+  return openedWith.get(db);
 }
 
 /**
