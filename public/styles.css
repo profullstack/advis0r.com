@@ -252,14 +252,21 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .auth-h { margin: 0 0 .35rem; font-size: 1.05rem; }
 .auth-sub { margin: 0 0 .9rem; color: var(--dim, #8b95a5); font-size: .85rem; line-height: 1.5; }
 .auth-l { display: block; margin: 0 0 .8rem; font-size: .8rem; color: var(--dim, #8b95a5); }
-.auth-l input { display: block; width: 100%; margin-top: .3rem; padding: .55rem .65rem; border-radius: 7px;
+.auth-l input, .pfs-profile__row input { display: block; width: 100%; margin-top: .3rem; padding: .55rem .65rem; border-radius: 7px;
   border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.03); color: var(--fg, #d7dee8); font: inherit; }
-.auth-l input:focus { outline: none; border-color: #2f81f7; }
+.auth-l input:focus, .pfs-profile__row input:focus { outline: none; border-color: #2f81f7; }
 .auth-opt { opacity: .6; }
 .auth-hint { display: block; margin-top: .3rem; font-size: .72rem; opacity: .7; line-height: 1.4; }
 .auth-submit { width: 100%; margin-top: .2rem; }
 .auth-alt { margin: .8rem 0 0; font-size: .78rem; text-align: center; color: var(--dim, #8b95a5); }
 .auth-alt a { color: #2f81f7; text-decoration: none; }
+/* The shared profile fields (@profullstack/profile) in the signup modal, styled
+   like the .auth-l label + input pairs around them. */
+.pfs-profile { border: 0; padding: 0; margin: 0; min-width: 0; }
+.pfs-profile__row { margin: 0 0 .8rem; font-size: .8rem; color: var(--dim, #8b95a5); }
+.pfs-profile__row label { display: block; }
+.pfs-profile__optional { opacity: .6; }
+.pfs-profile__error { margin: .3rem 0 0; font-size: .72rem; color: #ff8f8f; }
 .auth-note { margin: .1rem 0 .7rem; font-size: .78rem; line-height: 1.5; word-break: break-word; }
 .auth-note.ok { color: #6fcf8f; }
 .auth-note.bad { color: #ff8f8f; }

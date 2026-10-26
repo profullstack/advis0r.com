@@ -83,7 +83,7 @@ function renderAuthForm(mode, prefill = {}) {
     signup: `
       <h2 class="auth-h">Create an account</h2>
       <label class="auth-l">Email<input id="auth-email" type="email" autocomplete="email" value="${email}" required></label>
-      <label class="auth-l">Name <span class="auth-opt">(optional)</span><input id="auth-name" type="text" autocomplete="name"></label>
+      <div id="auth-profile"></div>
       <label class="auth-l">Password<input id="auth-password" type="password" autocomplete="new-password" required>
         <span class="auth-hint">At least 10 characters. A memorable passphrase beats a short complex one.</span></label>
       <div id="auth-note"></div>
@@ -104,6 +104,11 @@ function renderAuthForm(mode, prefill = {}) {
       <button class="primary auth-submit" id="auth-do-reset">Set new password</button>`,
   };
   body.innerHTML = forms[mode] || forms.login;
+  // Signup only: the shared profile fields (names, company, title, LinkedIn),
+  // rendered by the server into <template id="pfs-signup-fields">.
+  const tpl = document.getElementById("pfs-signup-fields");
+  const slot = document.getElementById("auth-profile");
+  if (slot && tpl) slot.replaceWith(tpl.content.cloneNode(true));
   body.querySelector("input")?.focus();
 }
 
@@ -119,10 +124,11 @@ function busy(id, on, label) {
 async function doSignup() {
   const email = document.getElementById("auth-email")?.value.trim();
   const password = document.getElementById("auth-password")?.value ?? "";
-  const displayName = document.getElementById("auth-name")?.value.trim();
+  const profile = {};
+  document.querySelectorAll("#auth-body .pfs-profile input").forEach((i) => (profile[i.name] = i.value.trim()));
   busy("auth-do-signup", true, "Create account");
   try {
-    const r = await authApi("/api/auth/signup", { email, password, displayName });
+    const r = await authApi("/api/auth/signup", { ...profile, email, password });
     authNote(r.message || "Check your email for a verification link.", "ok");
     // Only present when no mail transport is configured (local development).
     if (r.devVerifyUrl) authNote(`Dev mode — verify here: ${r.devVerifyUrl}`, "ok");

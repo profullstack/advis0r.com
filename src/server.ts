@@ -32,7 +32,8 @@ import { buildEvidence } from "./evidence/builder.ts";
 import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
 import { Mailer } from "./auth/email.ts";
-import { guardResponse, handleAuthRoute, requireUser } from "./auth/routes.ts";
+import { guardResponse, handleAuthRoute, handleProfileRoute, requireUser } from "./auth/routes.ts";
+import { COLUMNS as PROFILE_COLUMNS, renderProfileFields } from "@profullstack/profile";
 import { CoinPayClient } from "./credits/coinpay.ts";
 import { handleCreditsRoute } from "./credits/routes.ts";
 import { COST_PER_ANALYSIS, refundCredits, spendCredits } from "./credits/ledger.ts";
@@ -453,9 +454,18 @@ const server = Bun.serve({
 // Ring, Publish here) goes last in <body>, fetched server-side and cached for
 // an hour; when either source is unreachable the page goes without it.
 const PFS_FOOTER_SLOT = "<!--pfs-footer-->";
+// The signup modal's shared profile fields (@profullstack/profile), rendered once
+// into a <template> in index.html that public/auth.js clones. The modal keeps its
+// own email box, so the package renders the other five.
+const PFS_PROFILE_SLOT = "<!--pfs-profile-->";
+const SIGNUP_FIELDS_HTML = renderProfileFields({
+  fields: PROFILE_COLUMNS.filter((f) => f !== "email"),
+  idPrefix: "auth-",
+});
 async function withFooter(res: Response): Promise<Response> {
   if (!(res.headers.get("content-type") ?? "").includes("text/html") || !res.body) return res;
   let body = await res.text();
+  body = body.replace(PFS_PROFILE_SLOT, SIGNUP_FIELDS_HTML);
   if (body.includes(PFS_FOOTER_SLOT)) {
     let pfs = "";
     try {
@@ -885,6 +895,9 @@ async function route(req: Request): Promise<Response> {
 
       const authResponse = await handleAuthRoute(req, p, authDeps);
       if (authResponse) return authResponse;
+
+      const profileResponse = await handleProfileRoute(req, p, db);
+      if (profileResponse) return profileResponse;
 
       // The saved watchlist is the one authenticated feature — everything else
       // stays public.

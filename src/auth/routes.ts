@@ -14,6 +14,7 @@
  * ordinary top-level navigation working), and Secure in production.
  */
 import type { Client } from "@libsql/client";
+import { createProfileHandlers, createProfileStore, saveSignupProfile, validateProfile } from "@profullstack/profile";
 import { Mailer } from "./email.ts";
 import {
   type PublicUser,
@@ -126,12 +127,26 @@ export async function handleAuthRoute(
     if (!limit.allowed) {
       return json({ error: `Too many signups. Try again in ${limit.retryAfterMinutes} minutes.` }, 429);
     }
+    // The shared profile fields (names required; company, title, LinkedIn
+    // optional), checked before any account exists.
+    const check = validateProfile(body);
+    if (!check.ok) {
+      return json({ error: Object.values(check.errors)[0] ?? "Some fields need fixing.", errors: check.errors }, 400);
+    }
+    const fullName = [check.profile.first_name, check.profile.last_name].filter(Boolean).join(" ");
     const result = await signup(ctx, {
       email,
       password: str(body.password),
-      displayName: str(body.displayName) || undefined,
+      displayName: str(body.displayName) || fullName || undefined,
     });
     if (!result.ok) return json({ error: result.error }, 400);
+    // Saved only for an account this request created: a signup for an address
+    // that already has one must not rewrite that person's profile.
+    if (result.createdUserId) {
+      await saveSignupProfile(profileStore(deps.db), result.createdUserId, body, { email }).catch((err) =>
+        console.error("[auth] signup profile save failed:", (err as Error).message),
+      );
+    }
     return json({
       ok: true,
       // Identical whether or not the address already exists.
@@ -196,6 +211,39 @@ export async function handleAuthRoute(
   }
 
   return json({ error: "not found" }, 404);
+}
+
+/* ---------------- shared profile ---------------- */
+
+const stores = new WeakMap<object, ReturnType<typeof createProfileStore>>();
+
+/** The @profullstack/profile store (user_profiles, keyed by users.id) on this database. */
+export function profileStore(db: Client) {
+  let store = stores.get(db);
+  if (!store) {
+    store = createProfileStore(db);
+    stores.set(db, store);
+  }
+  return store;
+}
+
+/**
+ * GET/PUT/PATCH /api/v1/me/profile: the package's own handlers for the
+ * signed-in account. Returns null for any other path.
+ */
+export async function handleProfileRoute(req: Request, path: string, db: Client): Promise<Response | null> {
+  if (path !== "/api/v1/me/profile") return null;
+  const handlers = createProfileHandlers({
+    store: profileStore(db),
+    getUser: async (r: Request) => {
+      const user = await userForSession(db, readCookie(r, SESSION_COOKIE));
+      return user ? { id: user.id, email: user.email } : null;
+    },
+  });
+  if (req.method === "GET") return handlers.GET(req);
+  if (req.method === "PUT") return handlers.PUT(req);
+  if (req.method === "PATCH") return handlers.PATCH(req);
+  return json({ error: "method not allowed" }, 405);
 }
 
 /* ---------------- route guards ---------------- */
