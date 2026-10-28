@@ -53,6 +53,8 @@ import { resolveOne } from "./symbols/lookup.ts";
 import type { IndicatorConfig, RankedCandidate } from "./types.ts";
 import { injectPitFooter, pitFooterHtml } from "./util/pit-footer.ts";
 import { footerHtml } from "@profullstack/footer";
+import { createHub, emitTo, reportUrl, setHub, storeFor } from "./webhooks/hub.ts";
+import { webhooksRoute } from "./webhooks/routes.ts";
 
 const config = loadConfig();
 const db = getDb(config);
@@ -86,6 +88,12 @@ const authDeps = {
 console.log(
   `auth: email transport = ${mailer.transport}${mailer.configured ? ` (from ${mailer.from})` : " — verification emails will NOT be sent"}`,
 );
+
+// Customer webhooks (/api/v1/webhooks). One hub per process, its outbox in the
+// app database; start() drains due deliveries every few seconds.
+const hooks = createHub(await storeFor(db), config.appUrl).start();
+setHub(hooks, config.appUrl);
+const handleWebhooksRoute = webhooksRoute(hooks, db);
 
 // Watchlist digests. The scheduler is a background tick inside this process:
 // it needs no external cron, and `digest_sends` makes the repeated ticks (and a
@@ -353,6 +361,24 @@ async function getReport(
   };
 }
 
+/** analysis.completed: scores and a link, not the thesis the credit paid for. */
+function analysisCompletedData(ticker: string, c: RankedCandidate): Record<string, unknown> {
+  return {
+    ticker,
+    provider: c.provider ?? null,
+    model: c.model ?? null,
+    overall_score: c.overallScore ?? null,
+    confidence: c.confidence ?? null,
+    analyzed_at: c.analyzedAt ?? null,
+    url: reportUrl(ticker),
+  };
+}
+
+/** analysis.failed: the credit it cost was refunded. */
+function analysisFailedData(ticker: string, error: string): Record<string, unknown> {
+  return { ticker, error: error.slice(0, 300), refunded: true, credits: COST_PER_ANALYSIS };
+}
+
 /** Classify a source URL as a transcript, an embeddable video, or audio. */
 function classifySource(
   url: string,
@@ -549,6 +575,11 @@ async function route(req: Request): Promise<Response> {
             "GET /api/invites": "your invite quota, invites and ?ref= link (requires sign-in)",
             "POST /api/invites": "{ note? } create a single-use invite link (verified accounts)",
             "GET /i/<code>": "invite landing page",
+            "GET /api/v1/webhooks": "your webhook endpoints and the event types (verified accounts)",
+            "POST /api/v1/webhooks": "{ url, events?, description? } add an endpoint; the secret is returned once",
+            "PATCH|DELETE /api/v1/webhooks/:id": "change or remove an endpoint",
+            "POST /api/v1/webhooks/:id/test|rotate": "send webhook.test now, or replace the signing secret",
+            "GET /api/v1/webhooks/deliveries": "the delivery log",
             "GET /api/digest": "your watchlist email frequency (requires sign-in)",
             "POST /api/digest": "set frequency: daily | weekly | off",
             "GET /crypto": "crypto market data index — every crypto route is namespaced under /crypto/**",
@@ -729,6 +760,7 @@ async function route(req: Request): Promise<Response> {
                   });
                   if (outcome.candidate) {
                     const c = outcome.candidate;
+                    void emitTo(guard.user!.id, "analysis.completed", analysisCompletedData(ticker, c), `ticker:${ticker}`);
                     send("result", {
                       provider: c.provider,
                       model: c.model,
@@ -757,6 +789,7 @@ async function route(req: Request): Promise<Response> {
               }
               // Charged up front; nothing usable was produced, so give it back.
               await refundCredits(db, guard.user!.id, COST_PER_ANALYSIS, "analysis");
+              void emitTo(guard.user!.id, "analysis.failed", analysisFailedData(ticker, lastErr), `ticker:${ticker}`);
               send("failed", { error: lastErr, elapsedMs: Date.now() - started, refunded: true });
             } finally {
               clearInterval(beat);
@@ -815,6 +848,12 @@ async function route(req: Request): Promise<Response> {
             });
             if (outcome.candidate) {
               const c = outcome.candidate;
+              void emitTo(
+                guard.user!.id,
+                "analysis.completed",
+                analysisCompletedData(symbol.toUpperCase(), c),
+                `ticker:${symbol.toUpperCase()}`,
+              );
               // Same refresh as the streaming path, for the same reason.
               getReport(symbol.toUpperCase(), { rebuild: true, generatedBy: guard.user!.id }).catch(
                 (err) => console.error(`[report] refresh after analyze failed: ${String(err).slice(0, 200)}`),
@@ -837,6 +876,12 @@ async function route(req: Request): Promise<Response> {
           }
         }
         await refundCredits(db, guard.user!.id, COST_PER_ANALYSIS, "analysis");
+        void emitTo(
+          guard.user!.id,
+          "analysis.failed",
+          analysisFailedData(symbol.toUpperCase(), lastErr),
+          `ticker:${symbol.toUpperCase()}`,
+        );
         return json({ error: lastErr }, 502);
       }
 
@@ -916,6 +961,10 @@ async function route(req: Request): Promise<Response> {
 
       const profileResponse = await handleProfileRoute(req, p, db);
       if (profileResponse) return profileResponse;
+
+      // Customer webhooks: endpoints, keys, test pings, delivery log.
+      const webhooksResponse = await handleWebhooksRoute(req, p);
+      if (webhooksResponse) return webhooksResponse;
 
       // The saved watchlist is the one authenticated feature — everything else
       // stays public.

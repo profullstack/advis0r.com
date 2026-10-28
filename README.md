@@ -534,6 +534,28 @@ when market data is unavailable.
   `?ref=<code>` on any page is a first-touch affiliate link (cookie `referral_code`), attributed on
   confirmation. `transcripts credits invite-quota <email> <total>` hands out more invites.
 
+## Webhooks
+
+Signed-in, verified accounts can have advis0r POST to their own https endpoint
+when something happens, through [@profullstack/webhooks](https://github.com/profullstack/webhooks)
+(CloudEvents 1.0 bodies, Standard Webhooks `webhook-id` / `webhook-timestamp` /
+`webhook-signature` headers, a durable outbox with retries over about three days).
+
+| Event | Sent to | `data` |
+| --- | --- | --- |
+| `report.generated` | everyone watching the ticker | ticker, company_name, overall_score, confidence, classification, last_price, signal/source counts, generated_at, url |
+| `signal.extracted` | everyone watching the ticker (new, non-boilerplate signals; 10 per document at most) | signal_id, ticker, kind, direction, score, event_type, event_date, speaker, source_url, url |
+| `analysis.completed` | the account that ran the AI analysis | ticker, provider, model, overall_score, confidence, analyzed_at, url |
+| `analysis.failed` | the account that ran it (the credit was refunded) | ticker, error, refunded, credits |
+
+Payloads are summaries with a link to `/stocks/<SYMBOL>`, never the report or
+the analysis text. Manage endpoints on the Watchlist tab (Webhooks), over
+`/api/v1/webhooks` (session cookie; list/add/test/rotate/remove and the
+delivery log), or as an operator with
+`transcripts webhooks list|add|remove|enable|disable|test|rotate|deliveries <email> ...`.
+The outbox tables (`webhook_endpoints`, `webhook_deliveries`) are created at
+boot in the app database.
+
 ## Email digests
 
 Signed-in users get a market summary of the tickers on their saved watchlist,

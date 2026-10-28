@@ -22,6 +22,7 @@
  * sitemap can list hundreds of reports without parsing hundreds of JSON blobs.
  */
 import type { Client } from "@libsql/client";
+import { emitToWatchers, reportGeneratedData } from "../webhooks/hub.ts";
 
 /** Ticker symbols are 1-5 letters, optionally a class suffix (e.g. BRK.B). */
 const TICKER_RE = /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/;
@@ -130,8 +131,16 @@ export async function saveReport(
     ],
   });
 
-  const stored = await loadReport(db, ticker);
-  return stored ?? { ticker, payload, generatedAt: now, firstGeneratedAt: now };
+  const stored = (await loadReport(db, ticker)) ?? { ticker, payload, generatedAt: now, firstGeneratedAt: now };
+  // Customer webhooks: everyone watching this ticker (a no-op with no hub set).
+  await emitToWatchers(
+    db,
+    ticker,
+    "report.generated",
+    reportGeneratedData(ticker, payload, stored.generatedAt),
+    `ticker:${ticker}`,
+  );
+  return stored;
 }
 
 export async function loadReport(db: Client, ticker: string): Promise<StoredReport | null> {

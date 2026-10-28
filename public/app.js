@@ -2021,6 +2021,7 @@ function openWatchlistTab() {
   wlNotice = "";
   loadMyWatchlist();
   loadDigestPrefs();
+  loadWebhooks();
   loadWatchlistOverview();
 }
 
@@ -2349,6 +2350,154 @@ async function setDigestFrequency(frequency) {
 document.addEventListener("click", (e) => {
   const opt = e.target.closest("[data-digest]");
   if (opt) { e.preventDefault(); setDigestFrequency(opt.dataset.digest); }
+});
+
+/* ---- Webhooks: a signed POST to your own endpoint when something happens ----
+   Wraps /api/v1/webhooks (@profullstack/webhooks). The secret is shown once,
+   on create and on rotate; after that only "Rotate" gets a new one. */
+
+const WEBHOOK_EVENT_HINTS = {
+  "report.generated": "a report was rebuilt for a ticker you watch",
+  "signal.extracted": "a new signal was indexed for a ticker you watch",
+  "analysis.completed": "your AI analysis finished",
+  "analysis.failed": "your AI analysis failed (credit refunded)",
+};
+let webhooksState = null; // { endpoints, event_types } | { error }
+let webhookSecret = null; // { id, secret } shown once
+let webhookNote = "";
+let webhooksOpen = false;
+
+async function webhookCall(path, init = {}) {
+  const res = await fetch(`/api/v1/webhooks${path}`, {
+    credentials: "same-origin",
+    ...init,
+    headers: init.body ? { "content-type": "application/json" } : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function renderWebhooks() {
+  const el = document.getElementById("webhooks");
+  if (!el) return;
+  if (!authState.user) { el.innerHTML = ""; return; }
+  const head = `<div class="digest-row">
+      <span class="digest-lab">Webhooks</span>
+      <button class="digest-opt${webhooksOpen ? " on" : ""}" data-wh="toggle">${webhooksOpen ? "Hide" : "Manage"}</button>
+      <span class="digest-next">${
+        webhooksState && webhooksState.endpoints
+          ? `${webhooksState.endpoints.length} endpoint${webhooksState.endpoints.length === 1 ? "" : "s"}`
+          : ""
+      }</span>
+    </div>`;
+  if (!webhooksOpen) { el.innerHTML = head; return; }
+  if (!authState.user.emailVerified) {
+    el.innerHTML = `${head}<p class="digest-next">Verify your email to add webhooks.</p>`;
+    return;
+  }
+  if (!webhooksState) { el.innerHTML = `${head}<p class="digest-next">loading…</p>`; return; }
+  if (webhooksState.error) { el.innerHTML = `${head}<p class="digest-next">${esc(webhooksState.error)}</p>`; return; }
+
+  const types = webhooksState.event_types || Object.keys(WEBHOOK_EVENT_HINTS);
+  const rows = webhooksState.endpoints.map((e) => `<li class="wh-item" data-wh-id="${esc(e.id)}">
+      <div class="wh-url"><code>${esc(e.url)}</code>${e.enabled ? "" : ` <span class="wh-off">off${e.disabled_reason ? `: ${esc(e.disabled_reason)}` : ""}</span>`}</div>
+      <div class="wh-meta">${esc(e.events.join(", "))}${e.description ? ` · ${esc(e.description)}` : ""}${e.failures ? ` · ${e.failures} failure(s)` : ""}</div>
+      ${webhookSecret && webhookSecret.id === e.id
+        ? `<div class="wh-secret">Signing secret (shown once, keep it): <code>${esc(webhookSecret.secret)}</code></div>`
+        : ""}
+      <div class="wh-actions">
+        <button class="digest-opt" data-wh="test">Send test</button>
+        <button class="digest-opt" data-wh="${e.enabled ? "disable" : "enable"}">${e.enabled ? "Pause" : "Turn on"}</button>
+        <button class="digest-opt" data-wh="rotate">Rotate secret</button>
+        <button class="digest-opt" data-wh="remove">Remove</button>
+      </div>
+    </li>`).join("");
+  const boxes = types.map((t) => `<label class="wh-ev" title="${esc(WEBHOOK_EVENT_HINTS[t] || "")}">
+      <input type="checkbox" name="wh-event" value="${esc(t)}" /> ${esc(t)}</label>`).join("");
+  el.innerHTML = `${head}
+    <p class="digest-next">advis0r POSTs a signed <a href="https://www.standardwebhooks.com/" rel="noopener">Standard Webhooks</a>
+      CloudEvent to your https endpoint. Payloads carry the ticker, scores and a link, not the report itself.</p>
+    ${rows ? `<ul class="wh-list">${rows}</ul>` : ""}
+    <form class="wh-form" id="wh-form">
+      <input type="url" id="wh-url" placeholder="https://example.com/hooks/advis0r" required />
+      <input type="text" id="wh-desc" placeholder="Note (optional)" maxlength="200" />
+      <div class="wh-evs">${boxes}<span class="digest-next">none ticked = every event</span></div>
+      <button class="primary" type="submit">Add endpoint</button>
+    </form>
+    <p class="digest-next" id="wh-note">${esc(webhookNote)}</p>`;
+}
+
+async function loadWebhooks() {
+  if (!authState.user) { webhooksState = null; webhookSecret = null; renderWebhooks(); return; }
+  renderWebhooks();
+  if (!authState.user.emailVerified) return;
+  try {
+    webhooksState = await webhookCall("");
+  } catch (e) {
+    webhooksState = { error: e.message };
+  }
+  renderWebhooks();
+}
+
+async function webhookAction(action, id) {
+  webhookNote = "";
+  try {
+    if (action === "test") {
+      const r = await webhookCall(`/${encodeURIComponent(id)}/test`, { method: "POST" });
+      webhookNote = r.ok ? `Test delivered (HTTP ${r.status}).` : `Test failed: ${r.error || `HTTP ${r.status}`}`;
+    } else if (action === "rotate") {
+      if (!confirm("Replace this endpoint's signing secret? The old one stops working at once.")) return;
+      const r = await webhookCall(`/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+      webhookSecret = { id, secret: r.secret };
+    } else if (action === "remove") {
+      if (!confirm("Remove this endpoint and its delivery log?")) return;
+      await webhookCall(`/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } else if (action === "enable" || action === "disable") {
+      await webhookCall(`/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: action === "enable" }),
+      });
+    }
+    webhooksState = await webhookCall("");
+  } catch (e) {
+    webhookNote = e.message;
+  }
+  renderWebhooks();
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-wh]");
+  if (!btn) return;
+  e.preventDefault();
+  if (btn.dataset.wh === "toggle") {
+    webhooksOpen = !webhooksOpen;
+    if (!webhooksOpen) webhookSecret = null;
+    renderWebhooks();
+    return;
+  }
+  const item = btn.closest("[data-wh-id]");
+  if (item) webhookAction(btn.dataset.wh, item.dataset.whId);
+});
+
+document.addEventListener("submit", async (e) => {
+  if (e.target.id !== "wh-form") return;
+  e.preventDefault();
+  const url = document.getElementById("wh-url").value.trim();
+  const description = document.getElementById("wh-desc").value.trim();
+  const events = $$('input[name="wh-event"]:checked').map((i) => i.value);
+  webhookNote = "";
+  try {
+    const r = await webhookCall("", {
+      method: "POST",
+      body: JSON.stringify({ url, description, events: events.length ? events : ["*"] }),
+    });
+    webhookSecret = { id: r.endpoint.id, secret: r.secret };
+    webhooksState = await webhookCall("");
+  } catch (err) {
+    webhookNote = err.message;
+  }
+  renderWebhooks();
 });
 
 // Opening the tab loads it (see showView); an auth change reloads it, because
