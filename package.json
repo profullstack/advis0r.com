@@ -24,7 +24,7 @@
     "@profullstack/libsql-pg": "^0.1.4",
     "@profullstack/profile": "0.1.6",
     "@profullstack/redeem-credits": "0.2.0",
-    "@profullstack/x402-gateway": "^0.15.1",
+    "@profullstack/x402-gateway": "^0.15.2",
     "commander": "^15.0.0",
     "smol-toml": "^1.9.1",
     "zod": "^4.6.7"
