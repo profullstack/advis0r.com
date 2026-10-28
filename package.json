@@ -1,6 +1,6 @@
 {
   "name": "transcript-search",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "Bun CLI that discovers, indexes, and analyzes public executive communications to build a ranked, evidence-backed stock research watchlist.",
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,7 @@
     "@profullstack/libsql-pg": "^0.1.4",
     "@profullstack/profile": "0.1.6",
     "@profullstack/redeem-credits": "0.2.0",
+    "@profullstack/webhooks": "0.2.1",
     "@profullstack/x402-gateway": "^0.15.2",
     "commander": "^15.0.0",
     "smol-toml": "^1.9.1",

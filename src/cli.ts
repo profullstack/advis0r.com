@@ -371,6 +371,126 @@ program
     });
   });
 
+// --- webhooks -------------------------------------------------------------
+// The same hub the server runs (/api/v1/webhooks), driven for one account by
+// email. Deliveries queued here are sent by the server's drain loop; `test`
+// sends at once.
+const webhooks = program
+  .command("webhooks")
+  .description("Customer webhook endpoints for an account (the /api/v1/webhooks API, by email).");
+
+async function withHub<T>(email: string, fn: (hub: import("@profullstack/webhooks").Webhooks, userId: string) => Promise<T>) {
+  return withApp(async ({ db, config }) => {
+    const { createHub, storeFor } = await import("./webhooks/hub.ts");
+    const user = await findUserByEmail(db, email);
+    if (!user) {
+      console.error(`No account for ${email}`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      return await fn(createHub(await storeFor(db), config.appUrl), user.id);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+}
+
+webhooks
+  .command("list <email>")
+  .description("List an account's endpoints and the events advis0r sends.")
+  .option("--json", "print JSON")
+  .action(async (email: string, opts) => {
+    await withHub(email, async (hub, userId) => {
+      const endpoints = await hub.listEndpoints(userId);
+      if (opts.json) return console.log(JSON.stringify({ endpoints, event_types: hub.eventTypes }, null, 2));
+      console.log(`events: ${hub.eventTypes.join(", ")}`);
+      if (!endpoints.length) return console.log("No endpoints.");
+      for (const e of endpoints) {
+        console.log(`${e.id}  ${e.enabled ? "on " : "off"}  ${e.url}  [${e.events.join(", ")}]${e.description ? `  ${e.description}` : ""}`);
+      }
+    });
+  });
+
+webhooks
+  .command("add <email> <url>")
+  .description("Add an endpoint (https, public). Prints the signing secret once.")
+  .option("--events <list>", "comma-separated event patterns", "*")
+  .option("--description <text>", "a note for the account", "")
+  .action(async (email: string, url: string, opts) => {
+    await withHub(email, async (hub, userId) => {
+      const r = await hub.createEndpoint(userId, { url, events: String(opts.events), description: String(opts.description) });
+      console.log(`Added ${r.endpoint.id} -> ${r.endpoint.url} [${r.endpoint.events.join(", ")}]`);
+      console.log(`secret: ${r.secret}`);
+    });
+  });
+
+webhooks
+  .command("remove <email> <id>")
+  .description("Remove an endpoint and its delivery log.")
+  .action(async (email: string, id: string) => {
+    await withHub(email, async (hub, userId) => {
+      await hub.deleteEndpoint(userId, id);
+      console.log(`Removed ${id}`);
+    });
+  });
+
+webhooks
+  .command("enable <email> <id>")
+  .description("Turn an endpoint back on (clears its failure count).")
+  .action(async (email: string, id: string) => {
+    await withHub(email, async (hub, userId) => {
+      const e = await hub.updateEndpoint(userId, id, { enabled: true });
+      console.log(`${e.id} on`);
+    });
+  });
+
+webhooks
+  .command("disable <email> <id>")
+  .description("Pause an endpoint.")
+  .action(async (email: string, id: string) => {
+    await withHub(email, async (hub, userId) => {
+      const e = await hub.updateEndpoint(userId, id, { enabled: false });
+      console.log(`${e.id} off`);
+    });
+  });
+
+webhooks
+  .command("test <email> <id>")
+  .description("Send webhook.test to an endpoint now.")
+  .action(async (email: string, id: string) => {
+    await withHub(email, async (hub, userId) => {
+      const r = await hub.test(userId, id);
+      console.log(r.ok ? `delivered (${r.status})` : `failed: ${r.error ?? r.status}`);
+      if (!r.ok) process.exitCode = 1;
+    });
+  });
+
+webhooks
+  .command("rotate <email> <id>")
+  .description("Replace an endpoint's signing secret. Prints the new one.")
+  .action(async (email: string, id: string) => {
+    await withHub(email, async (hub, userId) => {
+      console.log(`secret: ${(await hub.rotateSecret(userId, id)).secret}`);
+    });
+  });
+
+webhooks
+  .command("deliveries <email>")
+  .description("Recent deliveries for an account.")
+  .option("--endpoint <id>", "only this endpoint")
+  .option("--limit <n>", "how many", "20")
+  .action(async (email: string, opts) => {
+    await withHub(email, async (hub, userId) => {
+      const rows = await hub.deliveries(userId, { endpointId: opts.endpoint, limit: Number(opts.limit) || 20 });
+      if (!rows.length) return console.log("No deliveries.");
+      for (const d of rows) {
+        console.log(`${d.created_at.slice(0, 19)}  ${d.status.padEnd(9)}  ${String(d.last_status ?? "-").padStart(3)}  ${d.event_type}  ${d.id}`);
+      }
+    });
+  });
+
 // --- credits --------------------------------------------------------------
 const credits = program
   .command("credits")

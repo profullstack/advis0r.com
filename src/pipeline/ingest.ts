@@ -19,6 +19,12 @@ import {
   subjectTerms,
 } from "../signals/subject.ts";
 import type { SourceTier, TranscriptQuery } from "../types.ts";
+import {
+  MAX_SIGNALS_PER_DOCUMENT,
+  emitToWatchers,
+  getHub,
+  signalExtractedData,
+} from "../webhooks/hub.ts";
 
 export interface IngestResult {
   documents: number;
@@ -191,7 +197,13 @@ export async function ingest(
             ],
           })),
         ];
+        // Customer webhooks: only signals this batch actually adds (INSERT OR
+        // IGNORE skips ones already indexed), and only when a hub is running.
+        const fresh = getHub() ? await unseenSignals(db, signals.filter((s) => !s.isBoilerplate)) : [];
         await db.batch(statements, "write");
+        for (const s of fresh.slice(0, MAX_SIGNALS_PER_DOCUMENT)) {
+          await emitToWatchers(db, s.ticker, "signal.extracted", signalExtractedData(s), `signal:${s.id}`);
+        }
         result.segments += segs.length;
         result.signals += signals.length;
         result.documents += 1;
@@ -201,6 +213,22 @@ export async function ingest(
     }
   }
   return result;
+}
+
+/** The signals in `signals` that are not in the table yet. */
+async function unseenSignals<T extends { id: string }>(db: Client, signals: T[]): Promise<T[]> {
+  if (!signals.length) return [];
+  try {
+    const ids = signals.map((s) => s.id);
+    const rs = await db.execute({
+      sql: `SELECT id FROM signals WHERE id IN (${ids.map(() => "?").join(",")})`,
+      args: ids,
+    });
+    const seen = new Set(rs.rows.map((r) => String(r.id)));
+    return signals.filter((s) => !seen.has(s.id));
+  } catch {
+    return [];
+  }
 }
 
 /** Tickers already known to the index — vocabulary for multi-company detection. */
