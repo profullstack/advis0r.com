@@ -11,7 +11,7 @@
         "@profullstack/profile": "0.1.6",
         "@profullstack/redeem-credits": "0.2.0",
         "@profullstack/webhooks": "0.2.1",
-        "@profullstack/x402-gateway": "^0.15.2",
+        "@profullstack/x402-gateway": "^0.15.3",
         "commander": "^15.0.0",
         "smol-toml": "^1.9.1",
         "zod": "^4.6.7",
@@ -92,7 +92,7 @@
 
     "@profullstack/webhooks": ["@profullstack/webhooks@0.2.1", "", {}, "sha512-QHeSkpu4O44oJ620qhQqxqFlD3u/OhupmXRnBHw4MGKuDTa0R+Y/727nnF7psSHxxSfnbWfNuVl15z3IXuaZiw=="],
 
-    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.15.2", "", { "dependencies": { "@profullstack/keys": "^0.1.0" } }, "sha512-f0el7rPd13StA04OxA0PGrrG0kxg/vvGPtvI0XYn8wlTGPut3G+2UKcMRzSxQdaF4LkYAOLnkg9S+LhmIKvDBA=="],
+    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.15.3", "", { "dependencies": { "@profullstack/keys": "^0.1.0" } }, "sha512-YtxaHuiNdnEmwQBkNJXGOEvFUb+5k54GPeZw5RiPKqYcKrA/tRTRVTMbyuX4XSGfmaOEo1BCGpa3w8S46+YQUg=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
