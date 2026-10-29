@@ -245,25 +245,36 @@ export async function login(
   const hash = row ? String(row.password_hash) : "$argon2id$v=19$m=19456,t=2,p=1$Ymx1ZmY$bm90YXJlYWxoYXNo";
   const passwordOk = await verifyPassword(input.password, hash);
 
-  if (!row || !passwordOk) return { ok: false, error: "Incorrect email or password." };
+  // An account created by Sign in with CoinPay has no password (empty hash):
+  // it can never be entered with one.
+  if (!row || !row.password_hash || !passwordOk) return { ok: false, error: "Incorrect email or password." };
   if (Number(row.disabled ?? 0) === 1) return { ok: false, error: "This account is disabled." };
 
+  const token = await createSession(ctx.db, String(row.id), { userAgent: input.userAgent, ip: input.ip });
+  return { ok: true, token, user: toPublicUser(row) };
+}
+
+/** Mint a session for an already-authenticated user; returns the cookie token. */
+export async function createSession(
+  db: Client,
+  userId: string,
+  meta: { userAgent?: string; ip?: string } = {},
+): Promise<string> {
   const token = generateToken();
-  await ctx.db.execute({
+  await db.execute({
     sql: `INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, user_agent, ip)
           VALUES (?,?,?,?,?,?,?)`,
     args: [
-      newId("ses"), String(row.id), hashToken(token), iso(),
+      newId("ses"), userId, hashToken(token), iso(),
       plus(SESSION_TTL_DAYS * 86_400_000),
-      input.userAgent?.slice(0, 300) ?? null, input.ip?.slice(0, 100) ?? null,
+      meta.userAgent?.slice(0, 300) ?? null, meta.ip?.slice(0, 100) ?? null,
     ],
   });
-  await ctx.db.execute({
+  await db.execute({
     sql: "UPDATE users SET last_login_at = ? WHERE id = ?",
-    args: [iso(), String(row.id)],
+    args: [iso(), userId],
   });
-
-  return { ok: true, token, user: toPublicUser(row) };
+  return token;
 }
 
 /** Resolve a session token to its user, or null when invalid/expired/revoked. */

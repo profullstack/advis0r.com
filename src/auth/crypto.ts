@@ -84,6 +84,9 @@ export function isValidEmail(email: string): boolean {
   const domain = e.slice(at + 1);
   if (!domain.includes(".") || domain.startsWith(".") || domain.endsWith(".")) return false;
   if (domain.includes("..")) return false;
+  // RFC 2606 reserves .invalid; CoinPay-only accounts use it for their
+  // placeholder address, so nobody may sign up with one.
+  if (domain === "invalid" || domain.endsWith(".invalid")) return false;
   return true;
 }
 

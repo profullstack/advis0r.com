@@ -441,6 +441,30 @@ CREATE TABLE IF NOT EXISTS sessions (
   ip            TEXT
 );
 
+-- Sign in with CoinPay (2026-10-29). One row per CoinPay identity, bound to the
+-- CoinPay `sub` only: the CoinPay email is unverified contact information and is
+-- never matched against users.email. One CoinPay identity per account.
+CREATE TABLE IF NOT EXISTS coinpay_identities (
+  sub           TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL UNIQUE REFERENCES users(id),
+  contact_email TEXT,
+  name          TEXT,
+  created_at    TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+-- A started CoinPay sign-in: the PKCE verifier and nonce stay server-side,
+-- keyed by SHA-256 of the state, and are consumed once by the callback.
+CREATE TABLE IF NOT EXISTS coinpay_oauth_pending (
+  state_hash    TEXT PRIMARY KEY,
+  verifier      TEXT NOT NULL,
+  nonce         TEXT NOT NULL,
+  mode          TEXT NOT NULL,
+  user_id       TEXT,
+  created_at    TEXT NOT NULL,
+  expires_at    TEXT NOT NULL
+);
+
 -- Single-use email tokens: address verification and password reset. Hashed at
 -- rest for the same reason as sessions.
 CREATE TABLE IF NOT EXISTS auth_tokens (

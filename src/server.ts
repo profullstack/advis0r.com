@@ -32,6 +32,7 @@ import { buildEvidence } from "./evidence/builder.ts";
 import { composeScore, classifyRisk } from "./scoring/score.ts";
 import { DISCLAIMER } from "./compliance.ts";
 import { Mailer } from "./auth/email.ts";
+import { coinpayConfigFromEnv, coinpayConfigured, handleCoinPayRoute } from "./auth/coinpay.ts";
 import { guardResponse, handleAuthRoute, handleProfileRoute, requireUser } from "./auth/routes.ts";
 import { COLUMNS as PROFILE_COLUMNS, renderProfileFields } from "@profullstack/profile";
 import { CoinPayClient } from "./credits/coinpay.ts";
@@ -78,13 +79,16 @@ const coinpay = new CoinPayClient({
 // /api/web answers 503 rather than pretending.
 const serp = new SerpClient({ apiKey: config.secrets.valueSerpApiKey });
 
+const coinpayOAuth = coinpayConfigFromEnv();
 const authDeps = {
   db,
   mailer,
   appUrl: config.appUrl,
   // Secure cookies require HTTPS; localhost development is served over HTTP.
   secureCookies: config.appUrl.startsWith("https://"),
+  coinpayEnabled: coinpayConfigured(coinpayOAuth),
 };
+console.log(`auth: Sign in with CoinPay ${authDeps.coinpayEnabled ? "enabled" : "disabled (no COINPAY_OAUTH_CLIENT_ID/SECRET)"}`);
 console.log(
   `auth: email transport = ${mailer.transport}${mailer.configured ? ` (from ${mailer.from})` : " — verification emails will NOT be sent"}`,
 );
@@ -958,6 +962,10 @@ async function route(req: Request): Promise<Response> {
 
       const authResponse = await handleAuthRoute(req, p, authDeps);
       if (authResponse) return authResponse;
+
+      // Sign in with CoinPay: start, callback, disconnect.
+      const coinpayAuthResponse = await handleCoinPayRoute(req, p, { ...authDeps, oauth: coinpayOAuth });
+      if (coinpayAuthResponse) return coinpayAuthResponse;
 
       const profileResponse = await handleProfileRoute(req, p, db);
       if (profileResponse) return profileResponse;
