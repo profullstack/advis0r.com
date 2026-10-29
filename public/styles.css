@@ -781,3 +781,13 @@ button.qitem:hover { border-color: var(--accent-2); color: var(--text); }
 /* Shared Profullstack footer (@profullstack/footer): muted like the rest of the chrome. */
 .pfs-footer { color: var(--dim); }
 .pfs-footer a:hover, .pfs-footer a:focus-visible { color: var(--accent); }
+
+/* Sign in with CoinPay: first option on sign-in and sign-up, Connect in Account. */
+.coinpay-btn {
+  display: block; text-align: center; text-decoration: none;
+  padding: .6rem .9rem; border-radius: 8px; font-weight: 600;
+  background: #2f81f7; color: #fff; margin: .2rem 0 .4rem;
+}
+.coinpay-btn:hover { filter: brightness(1.08); }
+.auth-or { display: flex; align-items: center; gap: .6rem; margin: .7rem 0; font-size: .74rem; color: var(--dim, #8b95a5); }
+.auth-or::before, .auth-or::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: .35; }

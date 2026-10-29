@@ -3,7 +3,7 @@
    Accounts only — nothing in the app is gated. Signing in is optional and the
    watchlist, search and signals views work exactly as before without it. */
 
-const authState = { user: null };
+const authState = { user: null, coinpay: { enabled: false, linked: false, hasPassword: false } };
 
 const aEsc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -25,6 +25,7 @@ async function refreshAuth() {
   try {
     const r = await authApi("/api/auth/me");
     authState.user = r.user;
+    authState.coinpay = r.coinpay || { enabled: false, linked: false, hasPassword: false };
   } catch {
     authState.user = null;
   }
@@ -38,10 +39,15 @@ function renderAuthBar() {
   const el = document.getElementById("authbar");
   if (!el) return;
   const u = authState.user;
+  // An account created by Sign in with CoinPay has a placeholder address and no
+  // password: show its name, and no "verify your email" nag it cannot act on.
+  const coinpayOnly = authState.coinpay.linked && !authState.coinpay.hasPassword;
   el.innerHTML = u
-    ? `<span class="auth-who" title="${aEsc(u.email)}">${aEsc(u.displayName || u.email)}</span>${
-        u.emailVerified ? "" : ' <span class="auth-unverified" title="Check your inbox for the verification link">unverified</span>'
-      } <button class="auth-link" id="auth-logout">Sign out</button>`
+    ? `<span class="auth-who" title="${aEsc(coinpayOnly ? "Signed in with CoinPay" : u.email)}">${aEsc(
+        u.displayName || (coinpayOnly ? "CoinPay user" : u.email),
+      )}</span>${
+        u.emailVerified || coinpayOnly ? "" : ' <span class="auth-unverified" title="Check your inbox for the verification link">unverified</span>'
+      } <button class="auth-link" id="auth-account">Account</button> <button class="auth-link" id="auth-logout">Sign out</button>`
     : `<button class="auth-link" id="auth-signin">Sign in</button>`;
 }
 
@@ -72,9 +78,16 @@ function renderAuthForm(mode, prefill = {}) {
   if (!body) return;
   const email = aEsc(prefill.email || "");
 
+  // Sign in with CoinPay comes first on both sign-in and sign-up: one CoinPay
+  // account signs in across every Profullstack site.
+  const coinpay = authState.coinpay.enabled
+    ? `<a class="primary coinpay-btn" id="auth-coinpay" href="/api/v1/coinpay/oauth/start">Sign in with CoinPay</a>
+       <p class="auth-or"><span>or use email</span></p>`
+    : "";
   const forms = {
     login: `
       <h2 class="auth-h">Sign in</h2>
+      ${coinpay}
       <label class="auth-l">Email<input id="auth-email" type="email" autocomplete="email" value="${email}" required></label>
       <label class="auth-l">Password<input id="auth-password" type="password" autocomplete="current-password" required></label>
       <div id="auth-note"></div>
@@ -82,6 +95,7 @@ function renderAuthForm(mode, prefill = {}) {
       <p class="auth-alt"><a href="#" data-auth-mode="signup">Create an account</a> · <a href="#" data-auth-mode="forgot">Forgot password?</a></p>`,
     signup: `
       <h2 class="auth-h">Create an account</h2>
+      ${coinpay}
       <label class="auth-l">Email<input id="auth-email" type="email" autocomplete="email" value="${email}" required></label>
       <div id="auth-profile"></div>
       <label class="auth-l">Password<input id="auth-password" type="password" autocomplete="new-password" required>
@@ -182,6 +196,85 @@ async function doReset(token) {
   }
 }
 
+/* ---- account: Connect / Disconnect CoinPay ---- */
+
+function openAccount() {
+  closeAuth();
+  const u = authState.user;
+  if (!u) return;
+  const cp = authState.coinpay;
+  const coinpayOnly = cp.linked && !cp.hasPassword;
+  const el = document.createElement("div");
+  el.id = "auth-modal";
+  el.className = "modal";
+  const coinpaySection = !cp.enabled && !cp.linked
+    ? ""
+    : cp.linked
+      ? `<p class="auth-sub">CoinPay is connected: you can sign in here with your CoinPay account.</p>
+         ${coinpayOnly
+           ? `<p class="auth-sub">This account was created with CoinPay, which is its only way in, so it cannot be disconnected.</p>`
+           : `<button class="auth-link" id="coinpay-disconnect">Disconnect CoinPay</button>`}`
+      : `<p class="auth-sub">Connect your CoinPay account to sign in here with it.</p>
+         <a class="primary coinpay-btn" href="/api/v1/coinpay/oauth/start?mode=link">Connect CoinPay</a>`;
+  el.innerHTML = `<div class="modal-backdrop" data-auth-close></div>
+    <div class="modal-panel auth-panel">
+      <h2 class="auth-h">Account</h2>
+      <p class="auth-sub">${aEsc(u.displayName || "")}${coinpayOnly ? "" : ` &lt;${aEsc(u.email)}&gt;`}</p>
+      ${coinpaySection ? `<h3 class="auth-h">CoinPay</h3>${coinpaySection}` : ""}
+      <div id="auth-note"></div>
+    </div>`;
+  document.body.appendChild(el);
+}
+
+async function disconnectCoinPay() {
+  try {
+    await authApi("/api/v1/coinpay/disconnect", {});
+    await refreshAuth();
+    openAccount();
+    authNote("CoinPay disconnected.", "ok");
+  } catch (e) {
+    authNote(e.message, "bad");
+  }
+}
+
+const COINPAY_MESSAGES = {
+  linked: ["CoinPay connected. You can sign in with it from now on.", "ok"],
+  signed_in: ["Signed in with CoinPay.", "ok"],
+  welcome: ["Welcome: your account was created with CoinPay.", "ok"],
+  not_configured: ["Sign in with CoinPay is not available right now.", "bad"],
+  rate_limited: ["Too many attempts. Try again in a few minutes.", "bad"],
+  sign_in_first: ["Sign in to this account first, then connect CoinPay from Account.", "bad"],
+  bad_state: ["That CoinPay sign-in expired or did not start here. Try again.", "bad"],
+  denied: ["CoinPay sign-in was cancelled.", "bad"],
+  bad_request: ["CoinPay sign-in failed. Try again.", "bad"],
+  exchange_failed: ["CoinPay sign-in failed. Try again.", "bad"],
+  linked_elsewhere: ["That CoinPay account is already connected to another advis0r account.", "bad"],
+  already_linked: ["This account already has a CoinPay account connected. Disconnect it first.", "bad"],
+  disabled: ["This account is disabled.", "bad"],
+};
+
+/** The CoinPay callback sends people back to /?coinpay=… or /?coinpay_error=…. */
+function handleCoinPayLanding() {
+  const url = new URL(location.href);
+  const outcome = url.searchParams.get("coinpay") || url.searchParams.get("coinpay_error");
+  if (!outcome) return false;
+  url.searchParams.delete("coinpay");
+  url.searchParams.delete("coinpay_error");
+  history.replaceState({}, "", url.pathname + url.search);
+  const [msg, kind] = COINPAY_MESSAGES[outcome] || ["CoinPay sign-in failed. Try again.", "bad"];
+  refreshAuth().then(() => {
+    if (outcome === "linked") openAccount();
+    else openAuth("login");
+    if (outcome === "signed_in" || outcome === "welcome") {
+      const body = document.getElementById("auth-body");
+      if (body) body.innerHTML = `<h2 class="auth-h">Signed in</h2><div id="auth-note"></div>`;
+      setTimeout(closeAuth, 1500);
+    }
+    authNote(msg, kind);
+  });
+  return true;
+}
+
 /* ---- email link landing pages ---- */
 
 async function handleAuthLanding() {
@@ -237,6 +330,8 @@ async function handleAuthLanding() {
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-auth-close]")) { closeAuth(); return; }
   if (e.target.id === "auth-signin") { e.preventDefault(); openAuth("login"); return; }
+  if (e.target.id === "auth-account") { e.preventDefault(); openAccount(); return; }
+  if (e.target.id === "coinpay-disconnect") { e.preventDefault(); disconnectCoinPay(); return; }
   if (e.target.id === "auth-logout") {
     e.preventDefault();
     authApi("/api/auth/logout", {}).finally(refreshAuth);
@@ -257,8 +352,10 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-refreshAuth();
-handleAuthLanding();
+if (!handleCoinPayLanding()) {
+  refreshAuth();
+  handleAuthLanding();
+}
 
 /* ---- Credits (PRD v3 §8) ----
    Free plan grants 100 credits/month; AI analysis spends them; more are bought

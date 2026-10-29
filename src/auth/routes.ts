@@ -9,12 +9,15 @@
  *   POST /api/auth/request-reset   { email }
  *   POST /api/auth/reset           { token, password }
  *
+ * Sign in with CoinPay lives in ./coinpay.ts (/api/v1/coinpay/*).
+ *
  * The session cookie is HttpOnly (JavaScript cannot read it, so XSS cannot
  * exfiltrate it), SameSite=Lax (blocks cross-site POST CSRF while keeping
  * ordinary top-level navigation working), and Secure in production.
  */
 import type { Client } from "@libsql/client";
 import { createProfileHandlers, createProfileStore, saveSignupProfile, validateProfile } from "@profullstack/profile";
+import { coinpayLinkFor } from "./coinpay.ts";
 import { Mailer } from "./email.ts";
 import { INVITE_COOKIE, REF_COOKIE, rememberSignupInvite, settleSignupInvite } from "../credits/codes.ts";
 import {
@@ -98,6 +101,8 @@ export interface AuthRouteDeps {
   mailer: Mailer;
   appUrl: string;
   secureCookies: boolean;
+  /** Sign in with CoinPay has a client id + secret on this deployment. */
+  coinpayEnabled?: boolean;
 }
 
 /**
@@ -115,7 +120,11 @@ export async function handleAuthRoute(
 
   if (path === "/api/auth/me") {
     const user = await userForSession(deps.db, readCookie(req, SESSION_COOKIE));
-    return json({ user, authenticated: Boolean(user) });
+    const coinpay = {
+      enabled: Boolean(deps.coinpayEnabled),
+      ...(user ? await coinpayLinkFor(deps.db, user.id) : { linked: false, hasPassword: false }),
+    };
+    return json({ user, authenticated: Boolean(user), coinpay });
   }
 
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);

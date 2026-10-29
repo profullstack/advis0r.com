@@ -420,6 +420,25 @@ create table if not exists sessions (
   ip text
 );
 
+create table if not exists coinpay_identities (
+  sub text PRIMARY KEY,
+  user_id text NOT NULL UNIQUE REFERENCES users(id),
+  contact_email text,
+  name text,
+  created_at text NOT NULL,
+  last_login_at text
+);
+
+create table if not exists coinpay_oauth_pending (
+  state_hash text PRIMARY KEY,
+  verifier text NOT NULL,
+  nonce text NOT NULL,
+  mode text NOT NULL,
+  user_id text,
+  created_at text NOT NULL,
+  expires_at text NOT NULL
+);
+
 create table if not exists auth_tokens (
   id text PRIMARY KEY,
   user_id text NOT NULL REFERENCES users(id),
