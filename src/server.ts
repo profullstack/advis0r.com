@@ -512,7 +512,14 @@ async function withFooter(res: Response): Promise<Response> {
   if (body.includes(PFS_FOOTER_SLOT)) {
     let pfs = "";
     try {
-      pfs = await footerHtml({ site: "https://advis0r.com/" });
+      pfs = await footerHtml({
+        site: "https://advis0r.com/",
+        links: [
+          { label: "About", href: "/#about" },
+          { label: "Reports", href: "/reports" },
+          { label: "API", href: "/api" },
+        ],
+      });
     } catch {
       // never break the page over a footer
     }
