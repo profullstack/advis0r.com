@@ -1234,6 +1234,7 @@ document.addEventListener("click", (e) => {
 });
 
 function renderDetail(d) {
+  destroyPlayers();
   detailReport = d;
   const t = d.technical || {};
   const f = d.facts || {};
@@ -1250,7 +1251,7 @@ function renderDetail(d) {
     let media = "";
     if (s.kind === "video" && s.embedUrl) {
       media = s.direct
-        ? `<video class="src-video" controls preload="metadata" src="${esc(s.embedUrl)}"></video>`
+        ? `<div class="src-video src-player" data-pf-player data-src="${esc(s.embedUrl)}"><video controls playsinline preload="metadata" src="${esc(s.embedUrl)}"></video></div>`
         : `<div class="src-embed"><iframe src="${esc(s.embedUrl)}" title="${esc(s.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
     } else if (s.kind === "audio" && s.embedUrl) {
       media = `<audio class="src-audio" controls preload="metadata" src="${esc(s.embedUrl)}"></audio>`;
@@ -1347,11 +1348,58 @@ function renderDetail(d) {
     <div class="disclaimer">${esc(d.disclaimer || "")}</div>`;
 
   mountCharts(d.bars || []);
+  mountPlayers($("#detail-panel"));
+}
+
+// Direct video files in a report play in @profullstack/player (src/player-bundle.ts): one control
+// bar that auto-hides, fullscreen including iPhone. Loaded only when a report has one; until it
+// loads, or if it never does, the <video> keeps its native controls.
+var playerModule = null; // var, like detailTicker: openTicker can run before this line is reached
+var players = [];
+function loadPlayer() {
+  if (!playerModule) {
+    if (!document.querySelector("link[data-pf-player-css]")) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "/pf-player.css";
+      link.dataset.pfPlayerCss = "";
+      document.head.append(link);
+    }
+    playerModule = import("/pf-player.js").catch((error) => {
+      playerModule = null;
+      throw error;
+    });
+  }
+  return playerModule;
+}
+function mountPlayers(root) {
+  const hosts = root ? [...root.querySelectorAll("[data-pf-player]")] : [];
+  if (!hosts.length) return;
+  loadPlayer()
+    .then(({ createPlayer }) => {
+      for (const host of hosts) {
+        const media = host.querySelector("video");
+        if (!media || !host.isConnected || host.classList.contains("pux-player")) continue;
+        try {
+          (players ||= []).push(createPlayer(host, { src: host.dataset.src, media }));
+        } catch (error) {
+          console.error("player failed, keeping native controls", error);
+        }
+      }
+    })
+    .catch((error) => console.error("player unavailable, keeping native controls", error));
+}
+function destroyPlayers() {
+  for (const player of players || []) {
+    try { player.destroy(); } catch {}
+  }
+  players = [];
 }
 
 async function openTicker(sym) {
   if (!sym) return;
   detailTicker = sym;
+  destroyPlayers();
   const modal = $("#detail");
   modal.classList.remove("hidden");
   $("#detail-panel").innerHTML = `<button class="close-x" data-close>×</button><div class="spinner"></div><p class="empty">Loading ${esc(sym)}…</p>`;
@@ -1365,6 +1413,7 @@ async function openTicker(sym) {
 }
 function closeDetail() {
   destroyCharts();
+  destroyPlayers();
   detailTicker = null;
   detailReport = null;
   $("#detail").classList.add("hidden");
