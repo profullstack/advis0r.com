@@ -56,6 +56,7 @@ import { injectPitFooter, pitFooterHtml } from "./util/pit-footer.ts";
 import { footerHtml } from "@profullstack/footer";
 import { createHub, emitTo, reportUrl, setHub, storeFor } from "./webhooks/hub.ts";
 import { webhooksRoute } from "./webhooks/routes.ts";
+import { handlePlayerRoute } from "./player-bundle.ts";
 
 const config = loadConfig();
 const db = getDb(config);
@@ -1035,6 +1036,10 @@ async function route(req: Request): Promise<Response> {
       if (reportResponse) return reportResponse;
 
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
+
+      // @profullstack/player, bundled on first use (src/player-bundle.ts).
+      const playerResponse = await handlePlayerRoute(p);
+      if (playerResponse) return playerResponse;
 
       return await serveStatic(p);
     } catch (err) {

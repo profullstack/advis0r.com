@@ -206,6 +206,8 @@ details.evidence .ev { font-size: 12.5px; color: var(--dim); border-left: 2px so
 .src-embed { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 12px 0 4px; border-radius: 10px; overflow: hidden; background: #000; }
 .src-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .src-video { width: 100%; max-height: 420px; border-radius: 10px; margin: 12px 0 4px; background: #000; display: block; }
+.src-player { overflow: hidden; aspect-ratio: 16 / 9; max-height: none; }
+.src-player video { display: block; width: 100%; height: 100%; background: #000; }
 .src-audio { width: 100%; margin: 12px 0 4px; display: block; }
 .badge.audio { background: rgba(196,141,255,.15); color: #c48dff; }
 .badge.news { background: rgba(122,180,255,.15); color: #7ab4ff; }
