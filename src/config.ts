@@ -21,7 +21,7 @@ export interface AppConfig {
   downloadsDir: string;
 
   ai: {
-    defaultProvider: "openai" | "anthropic";
+    defaultProvider: "c0mpute" | "openai" | "anthropic";
     defaultModelAlias: string;
     consensusProviders: string[];
     temperature: number;
@@ -120,12 +120,11 @@ const defaults: AppConfig = {
   databaseAuthToken: "",
   downloadsDir: "./data/downloads",
   ai: {
-    // Anthropic first: it is the provider with working credentials. Ordering a
-    // dead provider first cost ~1.4s of failover on every request and surfaced
-    // its quota error in the UI before the real analysis ran.
-    defaultProvider: "anthropic",
+    // c0mpute first: the peer network needs no vendor credit. Anthropic then
+    // OpenAI follow it as the paid fallbacks in the analyze routes' loop.
+    defaultProvider: "c0mpute",
     defaultModelAlias: "latest",
-    consensusProviders: ["anthropic", "openai"],
+    consensusProviders: ["c0mpute", "anthropic", "openai"],
     temperature: 0,
     requireStructuredOutput: true,
     requireCitations: true,

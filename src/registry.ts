@@ -13,12 +13,17 @@ import type { AlpacaMarketDataClient } from "./providers/interfaces.ts";
 import { OpenAIProvider } from "./providers/openai.ts";
 import { AnthropicProvider } from "./providers/anthropic.ts";
 import { OfflineAnalysisProvider } from "./providers/offline.ts";
+import { C0mputeAnalysisProvider, c0mputeTextProvider } from "./providers/c0mpute.ts";
 import { buildTranscriptProviders } from "./providers/transcripts/index.ts";
 import { NewsProvider } from "./providers/news/index.ts";
 import type { AnalysisProvider } from "./providers/interfaces.ts";
 
 export function buildRegistry(config: AppConfig) {
   const ai = new Map<string, AnalysisProvider>();
+  // c0mpute first (peer network, no vendor key). Anthropic and OpenAI stay as
+  // the paid fallbacks. C0MPUTE_DISABLED=1 leaves it out.
+  const c0mpute = c0mputeTextProvider();
+  if (c0mpute) ai.set("c0mpute", new C0mputeAnalysisProvider(c0mpute));
   ai.set("openai", new OpenAIProvider(config));
   ai.set("anthropic", new AnthropicProvider(config));
   ai.set("offline", new OfflineAnalysisProvider());

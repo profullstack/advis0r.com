@@ -14,9 +14,9 @@ database = "~/.local/share/transcripts/transcripts.sqlite"
 downloads = "~/.local/share/transcripts/downloads"
 
 [ai]
-default_provider = "openai"
+default_provider = "c0mpute"
 default_model_alias = "latest"
-consensus_providers = ["openai", "anthropic"]
+consensus_providers = ["c0mpute", "anthropic", "openai"]
 temperature = 0
 require_structured_output = true
 require_citations = true

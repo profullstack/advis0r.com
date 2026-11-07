@@ -6,6 +6,7 @@
       "name": "transcript-search",
       "dependencies": {
         "@profullstack/affiliates": "0.3.0",
+        "@profullstack/ai-providers": "0.2.0",
         "@profullstack/coinpay-onboard": "0.3.1",
         "@profullstack/footer": "^0.2.6",
         "@profullstack/libsql-pg": "^0.1.4",
@@ -83,6 +84,8 @@
     "@neon-rs/load": ["@neon-rs/load@0.0.4", "", {}, "sha512-kTPhdZyTQxB+2wpiRcFWrDcejc4JI6tkPuS7UZCG4l6Zvc5kU/gGQ/ozvHTh1XR5tS+UlfAfGuPajjzQjCiHCw=="],
 
     "@profullstack/affiliates": ["@profullstack/affiliates@0.3.0", "", { "dependencies": { "@profullstack/referrals": "^0.1.0" }, "bin": { "affiliates": "dist/cli.js" } }, "sha512-bp0iREciWetDWrQYOsa6SJRTzviekKwgJQuATT7vql+4equu7pN76q8tb3SP1oBMczydsv6rYUMvPpS6+QT7yQ=="],
+
+    "@profullstack/ai-providers": ["@profullstack/ai-providers@0.2.0", "", { "bin": { "ai-providers": "src/cli.js" } }, "sha512-xY7a4gHThur7uTUnmzft47TnqVK+NVA57K60LThSAeHhITbSNLhkt9Sp7uNKCSg0wC55b5wLFEFGsGzblCiT6Q=="],
 
     "@profullstack/coinpay-onboard": ["@profullstack/coinpay-onboard@0.3.1", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.32.2", "zod": "^4.6.7" }, "bin": { "coinpay-onboard": "bin/coinpay-onboard" } }, "sha512-+K7D6uaX10y+0V5sg7To1jKwNG8iCNbN9SSW6q5ACzoiDNswMox3G7gzY/Swxd128klq7ecN2Ni4JVNr50nRIQ=="],
 
