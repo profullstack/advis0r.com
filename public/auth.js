@@ -405,6 +405,9 @@ function openCredits() {
         ? `<p class="auth-sub">Top up with crypto or PayPal, paid through CoinPay.</p>
            <div class="credit-pkgs">${pkgs}</div>`
         : `<p class="auth-note">Credit purchases are not available right now.</p>`}
+      <p class="auth-sub">Deposit $99 in your CoinPay wallet and get a free month:
+        <a href="https://coinpayportal.com/pass" target="_blank" rel="noopener">CoinPay Pass</a>
+        (250 free credits when you sign in with CoinPay).</p>
       <h3 class="auth-h">Have a code?</h3>
       <label class="auth-l">Credit code<input id="credit-code" type="text" maxlength="48"
         placeholder="ADV-XXXX-XXXX-XXXX-XXXX" autocomplete="off"></label>

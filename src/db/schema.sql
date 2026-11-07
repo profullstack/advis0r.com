@@ -450,7 +450,8 @@ CREATE TABLE IF NOT EXISTS coinpay_identities (
   contact_email TEXT,
   name          TEXT,
   created_at    TEXT NOT NULL,
-  last_login_at TEXT
+  last_login_at TEXT,
+  pass_until    TEXT
 );
 
 -- A started CoinPay sign-in: the PKCE verifier and nonce stay server-side,
