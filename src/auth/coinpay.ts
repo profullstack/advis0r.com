@@ -27,6 +27,7 @@ import {
   sameState,
   SIGN_IN_SCOPES,
 } from "@profullstack/coinpay-onboard/oauth";
+import { applyPass } from "../credits/pass.ts";
 import { hashToken, newId } from "./crypto.ts";
 import { clientIp, readCookie, SESSION_COOKIE, sessionCookie } from "./routes.ts";
 import { createSession, rateLimit, userForSession } from "./service.ts";
@@ -238,7 +239,7 @@ async function callback(req: Request, deps: CoinPayRouteDeps): Promise<Response>
   if (params.get("error")) return fail(deps, "denied");
   if (!code) return fail(deps, "bad_request");
 
-  let identity: { sub: string; email: string | null; name: string | null };
+  let identity: Awaited<ReturnType<typeof finishSignIn>>;
   try {
     identity = await finishSignIn({
       code,
@@ -263,7 +264,9 @@ async function callback(req: Request, deps: CoinPayRouteDeps): Promise<Response>
     const user = await userForSession(deps.db, readCookie(req, SESSION_COOKIE));
     if (!user || user.id !== pending.userId) return fail(deps, "sign_in_first");
     if (existing) {
-      return existing.userId === user.id ? backToApp(deps, { coinpay: "linked" }) : fail(deps, "linked_elsewhere");
+      if (existing.userId !== user.id) return fail(deps, "linked_elsewhere");
+      await applyPassSafely(deps.db, user.id, identity, now);
+      return backToApp(deps, { coinpay: "linked" });
     }
     if ((await coinpayLinkFor(deps.db, user.id)).linked) return fail(deps, "already_linked");
     await deps.db.execute({
@@ -271,6 +274,7 @@ async function callback(req: Request, deps: CoinPayRouteDeps): Promise<Response>
             VALUES (?,?,?,?,?)`,
       args: [identity.sub, user.id, identity.email, identity.name, iso(now)],
     });
+    await applyPassSafely(deps.db, user.id, identity, now);
     return backToApp(deps, { coinpay: "linked" });
   }
 
@@ -287,11 +291,28 @@ async function callback(req: Request, deps: CoinPayRouteDeps): Promise<Response>
   } else {
     userId = await createCoinPayAccount(deps.db, identity, now);
   }
+  await applyPassSafely(deps.db, userId, identity, now);
   const token = await createSession(deps.db, userId, {
     userAgent: req.headers.get("user-agent") ?? undefined,
     ip: clientIp(req),
   });
   return backToApp(deps, { coinpay: existing ? "signed_in" : "welcome" }, [sessionCookie(token, deps.secureCookies)]);
+}
+
+/** A pass bookkeeping failure must never block the sign-in itself. */
+async function applyPassSafely(
+  db: Client,
+  userId: string,
+  identity: Awaited<ReturnType<typeof finishSignIn>>,
+  now: number,
+): Promise<void> {
+  try {
+    if (await applyPass(db, userId, identity.sub, identity.pass, new Date(now))) {
+      console.log(`[coinpay] Profullstack Pass credits granted to ${userId}`);
+    }
+  } catch (err) {
+    console.error("[coinpay] pass grant failed:", (err as Error).message);
+  }
 }
 
 async function disconnect(req: Request, deps: CoinPayRouteDeps): Promise<Response> {

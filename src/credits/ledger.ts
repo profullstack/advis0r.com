@@ -140,7 +140,7 @@ export async function creditFromSource(
   db: Client,
   userId: string,
   credits: number,
-  reason: "code" | "invite_bonus",
+  reason: "code" | "invite_bonus" | "coinpay_pass",
   source: string,
   note: string,
   now: Date = new Date(),

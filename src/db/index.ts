@@ -102,6 +102,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     digest_last_sent_at: "TEXT",
     digest_unsub_token: "TEXT",
   },
+  // Profullstack Pass expiry, seen only at CoinPay sign-in (src/credits/pass.ts).
+  coinpay_identities: {
+    pass_until: "TEXT",
+  },
 };
 
 /**

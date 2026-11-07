@@ -426,7 +426,8 @@ create table if not exists coinpay_identities (
   contact_email text,
   name text,
   created_at text NOT NULL,
-  last_login_at text
+  last_login_at text,
+  pass_until text
 );
 
 create table if not exists coinpay_oauth_pending (
