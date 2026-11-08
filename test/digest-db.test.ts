@@ -239,7 +239,7 @@ describe("message content", () => {
     const msg = mailer.sent.find((m) => m.to === "solo@example.com")!;
     expect(msg.text).toContain("BBB");
     expect(msg.text).not.toContain("AAA");
-    expect(msg.headers?.["List-Unsubscribe"]).toMatch(/^<https:\/\/advis0r\.com\/unsubscribe\?token=/);
+    expect(msg.headers?.["List-Unsubscribe"]).toMatch(/^<https:\/\/advis0r\.pwa\.pit\.world\/unsubscribe\?token=/);
   });
 });
 
