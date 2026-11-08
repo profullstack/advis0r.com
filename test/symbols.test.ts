@@ -281,7 +281,7 @@ describe("lookupSymbols", () => {
 
 describe("/api/lookup", () => {
   const route = (qs: string) =>
-    handleLookupRoute(new Request(`https://advis0r.com/api/lookup${qs}`), "/api/lookup", { db });
+    handleLookupRoute(new Request(`https://advis0r.pwa.pit.world/api/lookup${qs}`), "/api/lookup", { db });
 
   test("answers the reported query with the ticker", async () => {
     const res = await route("?q=rivian");
@@ -323,9 +323,9 @@ describe("/api/lookup", () => {
   });
 
   test("unrelated paths fall through, and non-GET is rejected", async () => {
-    expect(await handleLookupRoute(new Request("https://advis0r.com/api/stats"), "/api/stats", { db })).toBeNull();
+    expect(await handleLookupRoute(new Request("https://advis0r.pwa.pit.world/api/stats"), "/api/stats", { db })).toBeNull();
     const post = await handleLookupRoute(
-      new Request("https://advis0r.com/api/lookup", { method: "POST" }),
+      new Request("https://advis0r.pwa.pit.world/api/lookup", { method: "POST" }),
       "/api/lookup",
       { db },
     );

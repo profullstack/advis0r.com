@@ -40,7 +40,7 @@ function bars(symbol: string, n = 300, direction: 1 | -1 = 1): MarketBar[] {
   });
 }
 
-const OPTS = { appUrl: "https://advis0r.com" };
+const OPTS = { appUrl: "https://advis0r.pwa.pit.world" };
 const PAIR = getPair("BTC/USD")!;
 
 const indicatorsFor = (dir: 1 | -1 = 1) => calculateIndicators(bars("BTC/USD", 300, dir), INDICATORS);
@@ -144,7 +144,7 @@ describe("crypto page", () => {
     const page = render();
     expect(page).toContain("<!doctype html>");
     expect(page).not.toContain("<script src=");
-    expect(page).toContain(`<link rel="canonical" href="https://advis0r.com/crypto/BTC-USD">`);
+    expect(page).toContain(`<link rel="canonical" href="https://advis0r.pwa.pit.world/crypto/BTC-USD">`);
     expect(page).toContain('property="og:title"');
     expect(page).toContain("Bitcoin");
   });

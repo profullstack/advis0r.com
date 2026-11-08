@@ -147,7 +147,7 @@ describe("mailer", () => {
   });
 
   test("templates carry the link in both text and html", () => {
-    const url = "https://advis0r.com/verify?token=abc123";
+    const url = "https://advis0r.pwa.pit.world/verify?token=abc123";
     for (const m of [verificationEmail(url, 24), resetEmail(url, 60)]) {
       expect(m.text).toContain(url);
       expect(m.html).toContain(url);

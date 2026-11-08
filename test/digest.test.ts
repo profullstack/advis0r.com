@@ -432,7 +432,7 @@ describe("digest email", () => {
     source: "iex",
   } as any;
 
-  const ctx = { appUrl: "https://advis0r.com", unsubscribeToken: "tok-123", displayName: "Sam" };
+  const ctx = { appUrl: "https://advis0r.pwa.pit.world", unsubscribeToken: "tok-123", displayName: "Sam" };
   const user = summaryForTickers(summary, ["AAA", "BBB", "ZZZ"]);
   const msg = renderDigest(summary, user, ctx)!;
 
@@ -463,7 +463,7 @@ describe("digest email", () => {
 
   test("carries a working unsubscribe link and one-click headers", () => {
     const url = unsubscribeUrl(ctx.appUrl, ctx.unsubscribeToken);
-    expect(url).toBe("https://advis0r.com/unsubscribe?token=tok-123");
+    expect(url).toBe("https://advis0r.pwa.pit.world/unsubscribe?token=tok-123");
     expect(msg.html).toContain(url);
     expect(msg.text).toContain(url);
     expect(msg.headers!["List-Unsubscribe"]).toBe(`<${url}>`);

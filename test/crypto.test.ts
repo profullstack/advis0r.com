@@ -92,10 +92,10 @@ function fakeClient(overrides: Partial<AlpacaCryptoClient> = {}): AlpacaCryptoCl
 }
 
 const get = (path: string, client = fakeClient()) =>
-  handleCryptoRoute(new Request(`https://advis0r.com${path}`), path.split("?")[0]!, {
+  handleCryptoRoute(new Request(`https://advis0r.pwa.pit.world${path}`), path.split("?")[0]!, {
     client,
     indicators: INDICATORS,
-    appUrl: "https://advis0r.com",
+    appUrl: "https://advis0r.pwa.pit.world",
   });
 
 /** HTML body of a page response. */
@@ -215,9 +215,9 @@ describe("route dispatch", () => {
 
   test("writes are refused", async () => {
     const res = await handleCryptoRoute(
-      new Request("https://advis0r.com/crypto/assets", { method: "POST" }),
+      new Request("https://advis0r.pwa.pit.world/crypto/assets", { method: "POST" }),
       "/crypto/assets",
-      { client: fakeClient(), indicators: INDICATORS, appUrl: "https://advis0r.com" },
+      { client: fakeClient(), indicators: INDICATORS, appUrl: "https://advis0r.pwa.pit.world" },
     );
     expect(res!.status).toBe(405);
   });
@@ -373,19 +373,19 @@ describe("errors", () => {
 
 describe("the old in-app deep link", () => {
   const redirect = (path: string, query = "") =>
-    cryptoDeepLinkRedirect(path, new URL(`https://advis0r.com${path}${query}`), "https://advis0r.com");
+    cryptoDeepLinkRedirect(path, new URL(`https://advis0r.pwa.pit.world${path}${query}`), "https://advis0r.pwa.pit.world");
 
   test("/?pair=SOL-USD lands on the pair's page", async () => {
     // This URL opened a modal with no analysis and nothing to share. It is a
     // permanent redirect now, so links already sent to people still work.
     const res = redirect("/", "?pair=SOL-USD");
     expect(res!.status).toBe(301);
-    expect(res!.headers.get("location")).toBe("https://advis0r.com/crypto/SOL-USD");
+    expect(res!.headers.get("location")).toBe("https://advis0r.pwa.pit.world/crypto/SOL-USD");
   });
 
   test("it accepts the same spellings every other route does", async () => {
     for (const q of ["?pair=btc", "?pair=BTC-USD", "?pair=BTC/USD", "?pair=btcusd"]) {
-      expect(redirect("/", q)!.headers.get("location")).toBe("https://advis0r.com/crypto/BTC-USD");
+      expect(redirect("/", q)!.headers.get("location")).toBe("https://advis0r.pwa.pit.world/crypto/BTC-USD");
     }
   });
 

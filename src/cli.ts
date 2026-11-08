@@ -609,7 +609,7 @@ credits
           `${minted.maxRedemptions} redemption(s), id ${minted.id}` +
           (minted.expiresAt ? `, expires ${new Date(minted.expiresAt).toISOString().slice(0, 10)}` : ""),
       );
-      console.log("  Redeem at https://advis0r.com/invites#code or in the Credits panel.");
+      console.log("  Redeem at https://advis0r.pwa.pit.world/invites#code or in the Credits panel.");
     });
   });
 

@@ -81,7 +81,7 @@ export function createHub(
 }
 
 let hub: Webhooks | null = null;
-let siteUrl = "https://advis0r.com";
+let siteUrl = "https://advis0r.pwa.pit.world";
 
 /** The server's hub, once set. */
 export function getHub(): Webhooks | null {
