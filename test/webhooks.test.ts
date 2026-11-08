@@ -35,7 +35,7 @@ const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 function hub(): Webhooks {
-  return createHub(memoryStore(), "https://advis0r.com/", {
+  return createHub(memoryStore(), "https://advis0r.pwa.pit.world/", {
     fetchImpl: fakeFetch,
     // Receivers in tests are fake hostnames; skip DNS, keep https-only.
     guard: { lookup: async () => ["93.184.216.34"] },
@@ -99,7 +99,7 @@ describe("events", () => {
 
   test("report.generated reaches watchers only, signed, summary plus link", async () => {
     const h = hub();
-    setHub(h, "https://advis0r.com");
+    setHub(h, "https://advis0r.pwa.pit.world");
     const watcher = await createUser("w1@example.com", { tickers: ["ACME"] });
     const other = await createUser("w2@example.com", { tickers: ["OTHR"] });
     const { secret } = await h.createEndpoint(watcher.id, { url: "https://hooks.example.com/a", events: ["report.*"] });
@@ -114,7 +114,7 @@ describe("events", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.event.type).toBe("report.generated");
-    expect(r.event.source).toBe("https://advis0r.com");
+    expect(r.event.source).toBe("https://advis0r.pwa.pit.world");
     expect(r.event.subject).toBe("ticker:ACME");
     expect(r.event.data).toMatchObject({
       ticker: "ACME",
@@ -122,7 +122,7 @@ describe("events", () => {
       overall_score: 72,
       classification: "speculative",
       signal_count: 1,
-      url: "https://advis0r.com/stocks/ACME",
+      url: "https://advis0r.pwa.pit.world/stocks/ACME",
     });
     expect(received[0]!.body).not.toContain("PAID");
   });
@@ -165,7 +165,7 @@ describe("events", () => {
       event_date: "2026-10-01",
       speaker: "CEO",
       source_url: "https://example.com/t",
-      url: "https://advis0r.com/stocks/ACME",
+      url: "https://advis0r.pwa.pit.world/stocks/ACME",
     });
   });
 });
@@ -173,16 +173,16 @@ describe("events", () => {
 describe("/api/v1/webhooks", () => {
   test("401 without a session, not ours outside the base path", async () => {
     const route = webhooksRoute(hub(), db);
-    const res = await route(new Request("https://advis0r.com/api/v1/webhooks"), "/api/v1/webhooks");
+    const res = await route(new Request("https://advis0r.pwa.pit.world/api/v1/webhooks"), "/api/v1/webhooks");
     expect(res!.status).toBe(401);
-    expect(await route(new Request("https://advis0r.com/api/watchlist"), "/api/watchlist")).toBeNull();
+    expect(await route(new Request("https://advis0r.pwa.pit.world/api/watchlist"), "/api/watchlist")).toBeNull();
   });
 
   test("unverified accounts are refused", async () => {
     const u = await createUser("unv@example.com", { verified: false });
     const route = webhooksRoute(hub(), db);
     const res = await route(
-      new Request("https://advis0r.com/api/v1/webhooks", { headers: { cookie: u.cookie } }),
+      new Request("https://advis0r.pwa.pit.world/api/v1/webhooks", { headers: { cookie: u.cookie } }),
       "/api/v1/webhooks",
     );
     expect(res!.status).toBe(401);
@@ -193,7 +193,7 @@ describe("/api/v1/webhooks", () => {
     const route = webhooksRoute(hub(), db);
     const call = (path: string, init: RequestInit = {}) =>
       route(
-        new Request(`https://advis0r.com${path}`, {
+        new Request(`https://advis0r.pwa.pit.world${path}`, {
           ...init,
           headers: { cookie: u.cookie, "content-type": "application/json" },
         }),

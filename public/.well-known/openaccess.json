@@ -1,10 +1,10 @@
 {
   "openaccess": "0.1",
   "name": "advis0r",
-  "url": "https://advis0r.com",
+  "url": "https://advis0r.pwa.pit.world",
   "operator": "https://logicsrc.com/.well-known/openprofile.md",
   "redirect_uris": [
-    "https://advis0r.com/api/v1/openaccess/callback"
+    "https://advis0r.pwa.pit.world/api/v1/openaccess/callback"
   ],
   "jwks": {
     "keys": [
@@ -22,7 +22,7 @@
   "honours": [
     "profullstack.com/all-access"
   ],
-  "webhooks": "https://advis0r.com/api/v1/openaccess/events",
+  "webhooks": "https://advis0r.pwa.pit.world/api/v1/openaccess/events",
   "hubs": [
     "https://openaccess.logicsrc.com"
   ]

@@ -15,7 +15,7 @@ import { CREDIT_PACKAGES, getBalance } from "../src/credits/ledger.ts";
 
 const SECRET = "whsec_checkout_test";
 const coinpay = new CoinPayClient({ apiKey: "cp_live_test", webhookSecret: SECRET, baseUrl: "https://coinpayportal.com/api" });
-const APP = "https://advis0r.com";
+const APP = "https://advis0r.pwa.pit.world";
 const USER = { id: "usr_buyer", email: "buyer@example.com" };
 const OTHER = { id: "usr_other", email: "other@example.com" };
 

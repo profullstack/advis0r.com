@@ -465,7 +465,7 @@ async function candidateTickers(topic: string | null, limit: number): Promise<st
  * People, search engines and retrieval crawlers pass through untouched.
  */
 const crawlGateway = createGateway({
-  siteUrl: process.env.SITE_URL ?? "https://advis0r.com",
+  siteUrl: process.env.SITE_URL ?? "https://advis0r.pwa.pit.world",
   siteName: "advis0r",
   coinpay: { apiKey: process.env.COINPAY_X402_KEY },
   payTo: process.env.CRAWL_PAY_TO,
@@ -514,7 +514,7 @@ async function withFooter(res: Response): Promise<Response> {
     let pfs = "";
     try {
       pfs = await footerHtml({
-        site: "https://advis0r.com/",
+        site: "https://advis0r.pwa.pit.world/",
         links: [
           { label: "About", href: "/#about" },
           { label: "Reports", href: "/reports" },

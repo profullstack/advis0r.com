@@ -93,7 +93,7 @@ async function createUser(
 }
 
 function deps(mailer: FakeMailer) {
-  return { db, mailer: mailer as unknown as Mailer, market, appUrl: "https://advis0r.com" };
+  return { db, mailer: mailer as unknown as Mailer, market, appUrl: "https://advis0r.pwa.pit.world" };
 }
 
 beforeAll(async () => {
@@ -277,14 +277,14 @@ describe("preferences and unsubscribe", () => {
 });
 
 describe("unsubscribe endpoint", () => {
-  const routeDeps = () => ({ db, appUrl: "https://advis0r.com" });
+  const routeDeps = () => ({ db, appUrl: "https://advis0r.pwa.pit.world" });
   const get = (url: string, headers?: Record<string, string>) =>
     handleDigestRoute(new Request(url, { headers }), "/unsubscribe", routeDeps());
 
   test("a GET changes nothing — link scanners must not unsubscribe anyone", async () => {
     const id = await createUser("scanned@example.com", { tickers: ["AAA"] });
     const token = await unsubscribeToken(db, id);
-    const res = await get(`https://advis0r.com/unsubscribe?token=${token}`);
+    const res = await get(`https://advis0r.pwa.pit.world/unsubscribe?token=${token}`);
     expect(res!.status).toBe(200);
     expect(await res!.text()).toContain("Turn off watchlist emails?");
     // The subscription is untouched until the confirmation is posted.
@@ -297,7 +297,7 @@ describe("unsubscribe endpoint", () => {
     const body = new FormData();
     body.set("token", token);
     const res = await handleDigestRoute(
-      new Request("https://advis0r.com/unsubscribe", {
+      new Request("https://advis0r.pwa.pit.world/unsubscribe", {
         method: "POST",
         body,
         headers: { accept: "text/html" },
@@ -313,7 +313,7 @@ describe("unsubscribe endpoint", () => {
     const id = await createUser("oneclick@example.com", { tickers: ["AAA"] });
     const token = await unsubscribeToken(db, id);
     const res = await handleDigestRoute(
-      new Request(`https://advis0r.com/unsubscribe?token=${token}`, {
+      new Request(`https://advis0r.pwa.pit.world/unsubscribe?token=${token}`, {
         method: "POST",
         body: "List-Unsubscribe=One-Click",
         headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -326,11 +326,11 @@ describe("unsubscribe endpoint", () => {
   });
 
   test("an unknown token is not an existence oracle", async () => {
-    const res = await get("https://advis0r.com/unsubscribe?token=nope", { accept: "text/html" });
+    const res = await get("https://advis0r.pwa.pit.world/unsubscribe?token=nope", { accept: "text/html" });
     // GET is always the same confirmation page, real token or not.
     expect(await res!.text()).toContain("Turn off watchlist emails?");
     const posted = await handleDigestRoute(
-      new Request("https://advis0r.com/unsubscribe?token=nope", {
+      new Request("https://advis0r.pwa.pit.world/unsubscribe?token=nope", {
         method: "POST",
         headers: { accept: "text/html" },
       }),
@@ -343,7 +343,7 @@ describe("unsubscribe endpoint", () => {
 
   test("the preferences API refuses anonymous callers", async () => {
     const res = await handleDigestRoute(
-      new Request("https://advis0r.com/api/digest"),
+      new Request("https://advis0r.pwa.pit.world/api/digest"),
       "/api/digest",
       routeDeps(),
     );
@@ -352,7 +352,7 @@ describe("unsubscribe endpoint", () => {
   });
 
   test("unrelated paths fall through to the rest of the router", async () => {
-    expect(await handleDigestRoute(new Request("https://advis0r.com/api/stats"), "/api/stats", routeDeps())).toBeNull();
+    expect(await handleDigestRoute(new Request("https://advis0r.pwa.pit.world/api/stats"), "/api/stats", routeDeps())).toBeNull();
   });
 });
 

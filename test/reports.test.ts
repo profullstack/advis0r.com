@@ -34,7 +34,7 @@ import { handleReportRoute, isWatching } from "../src/reports/routes.ts";
 const dir = mkdtempSync(join(tmpdir(), "advis0r-reports-"));
 let db: Client;
 
-const APP_URL = "https://advis0r.com";
+const APP_URL = "https://advis0r.pwa.pit.world";
 
 function payload(ticker: string, over: Record<string, any> = {}): Record<string, any> {
   return {
@@ -287,7 +287,7 @@ describe("report page", () => {
   });
 
   test("is self-describing to crawlers and preview cards", () => {
-    expect(page).toContain(`<link rel="canonical" href="https://advis0r.com/stocks/AAA">`);
+    expect(page).toContain(`<link rel="canonical" href="https://advis0r.pwa.pit.world/stocks/AAA">`);
     expect(page).toContain(`<meta property="og:title"`);
     expect(page).toContain(`application/ld+json`);
     expect(page).toContain(`"@type":"Report"`);
@@ -370,8 +370,8 @@ describe("index page and sitemap", () => {
       APP_URL,
     );
     expect(xml.startsWith("<?xml")).toBe(true);
-    expect(xml).toContain("<loc>https://advis0r.com/stocks/AAA</loc>");
-    expect(xml).toContain("<loc>https://advis0r.com/stocks/BRK.B</loc>");
+    expect(xml).toContain("<loc>https://advis0r.pwa.pit.world/stocks/AAA</loc>");
+    expect(xml).toContain("<loc>https://advis0r.pwa.pit.world/stocks/BRK.B</loc>");
     expect(xml).toContain("<lastmod>2026-08-03</lastmod>");
   });
 });
@@ -407,7 +407,7 @@ describe("report routes", () => {
   test("lower-case URLs redirect to the canonical symbol", async () => {
     const res = await route("/stocks/aaa");
     expect(res!.status).toBe(301);
-    expect(res!.headers.get("location")).toBe("https://advis0r.com/stocks/AAA");
+    expect(res!.headers.get("location")).toBe("https://advis0r.pwa.pit.world/stocks/AAA");
   });
 
   test("the old /ticker/ URLs still resolve", async () => {
@@ -415,14 +415,14 @@ describe("report routes", () => {
     // shared. A shareable page that stops resolving is worse than an extra hop.
     const res = await route("/ticker/AAA");
     expect(res!.status).toBe(301);
-    expect(res!.headers.get("location")).toBe("https://advis0r.com/stocks/AAA");
+    expect(res!.headers.get("location")).toBe("https://advis0r.pwa.pit.world/stocks/AAA");
   });
 
   test("the old URLs redirect before validating, so a bad one still lands somewhere real", async () => {
     const res = await route("/ticker/aaa");
     expect(res!.status).toBe(301);
     // Case is canonicalized by the /stocks/ handler on the next hop.
-    expect(res!.headers.get("location")).toBe("https://advis0r.com/stocks/aaa");
+    expect(res!.headers.get("location")).toBe("https://advis0r.pwa.pit.world/stocks/aaa");
   });
 
   test("a path that is not a ticker cannot reach the store", async () => {
@@ -434,7 +434,7 @@ describe("report routes", () => {
     expect((await route("/reports"))!.status).toBe(200);
     expect(await (await route("/api/reports"))!.json()).toHaveProperty("reports");
     expect(await (await route("/sitemap.xml"))!.text()).toContain("<urlset");
-    expect(await (await route("/robots.txt"))!.text()).toContain("Sitemap: https://advis0r.com/sitemap.xml");
+    expect(await (await route("/robots.txt"))!.text()).toContain("Sitemap: https://advis0r.pwa.pit.world/sitemap.xml");
   });
 
   test("unrelated paths fall through to the rest of the router", async () => {

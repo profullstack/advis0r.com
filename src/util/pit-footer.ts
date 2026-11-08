@@ -4,7 +4,7 @@
 // and on any failure with nothing cached it renders nothing: the footer must
 // never break a page.
 
-const PIT_FOOTER_URL = "https://pit.world/snippets/footer.html?site=advis0r.com";
+const PIT_FOOTER_URL = "https://pit.world/snippets/footer.html?site=advis0r.pwa.pit.world";
 const TTL_MS = 60 * 60 * 1000;
 const TIMEOUT_MS = 3000;
 
