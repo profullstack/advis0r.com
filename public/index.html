@@ -10,6 +10,10 @@
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="stylesheet" href="/styles.css" />
+    <!-- WebMCP (@profullstack/webmcp): site_info, open_page, search_site, plus
+         advis0r's own tools in /webmcp-tools.js, for an AI agent in the browser. -->
+    <script type="module" data-webmcp src="https://cdn.jsdelivr.net/npm/@profullstack/webmcp@0/src/embed.js" data-search-api="/api/search?q={query}&limit={limit}" data-search-description="Full-text search across every indexed earnings-call transcript." data-pages='{"discover":"/discover","watchlist":"/watchlist","search":"/search","signals":"/signals","crypto":"/crypto","about":"/about"}'></script>
+    <script type="module" src="/webmcp-tools.js"></script>
   </head>
   <body>
     <header class="topbar">
