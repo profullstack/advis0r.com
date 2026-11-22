@@ -20,14 +20,14 @@
   },
   "dependencies": {
     "@profullstack/affiliates": "0.3.0",
-    "@profullstack/coinpay-onboard": "^0.5.0",
+    "@profullstack/coinpay-onboard": "^0.5.1",
     "@profullstack/footer": "^0.2.6",
     "@profullstack/libsql-pg": "^0.1.4",
     "@profullstack/player": "0.17.0",
     "@profullstack/profile": "0.1.6",
     "@profullstack/redeem-credits": "0.2.0",
     "@profullstack/webhooks": "0.2.1",
-    "@profullstack/x402-gateway": "^0.18.1",
+    "@profullstack/x402-gateway": "^0.18.2",
     "commander": "^15.0.0",
     "smol-toml": "^1.9.1",
     "zod": "^4.6.7"

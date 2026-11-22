@@ -19,6 +19,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const DEFAULT_BASE_URL = "https://coinpayportal.com/api";
 
+/** Who CoinPay sees calling: every fleet app shares one host and one IP. */
+const COINPAY_UA = `advis0r.com${process.env.npm_package_version ? `/${process.env.npm_package_version}` : ""} (+https://advis0r.com)`;
+
 /**
  * Chain codes CoinPayPortal accepts. These are symbol-style codes ("ETH",
  * "USDC_ETH") — not chain names like "ethereum", which the API rejects.
@@ -125,6 +128,7 @@ export class CoinPayClient {
       headers: {
         "content-type": "application/json",
         Authorization: `Bearer ${this.config.apiKey}`,
+        "user-agent": COINPAY_UA,
       },
       body: JSON.stringify({
         amount: input.amountUsd,
@@ -169,6 +173,7 @@ export class CoinPayClient {
       headers: {
         "content-type": "application/json",
         Authorization: `Bearer ${this.config.apiKey}`,
+        "user-agent": COINPAY_UA,
         ...(input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {}),
       },
       body: JSON.stringify(checkoutSessionBody(input)),
@@ -194,7 +199,7 @@ export class CoinPayClient {
 
   async getPayment(paymentId: string): Promise<Record<string, unknown>> {
     const res = await fetch(`${this.baseUrl}/payments/${encodeURIComponent(paymentId)}`, {
-      headers: { Authorization: `Bearer ${this.config.apiKey}` },
+      headers: { Authorization: `Bearer ${this.config.apiKey}`, "user-agent": COINPAY_UA },
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) throw new Error(`CoinPayPortal ${res.status}`);

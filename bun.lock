@@ -6,14 +6,14 @@
       "name": "transcript-search",
       "dependencies": {
         "@profullstack/affiliates": "0.3.0",
-        "@profullstack/coinpay-onboard": "^0.5.0",
+        "@profullstack/coinpay-onboard": "^0.5.1",
         "@profullstack/footer": "^0.2.6",
         "@profullstack/libsql-pg": "^0.1.4",
         "@profullstack/player": "0.17.0",
         "@profullstack/profile": "0.1.6",
         "@profullstack/redeem-credits": "0.2.0",
         "@profullstack/webhooks": "0.2.1",
-        "@profullstack/x402-gateway": "^0.18.1",
+        "@profullstack/x402-gateway": "^0.18.2",
         "commander": "^15.0.0",
         "smol-toml": "^1.9.1",
         "zod": "^4.6.7",
@@ -84,7 +84,7 @@
 
     "@profullstack/affiliates": ["@profullstack/affiliates@0.3.0", "", { "dependencies": { "@profullstack/referrals": "^0.1.0" }, "bin": { "affiliates": "dist/cli.js" } }, "sha512-bp0iREciWetDWrQYOsa6SJRTzviekKwgJQuATT7vql+4equu7pN76q8tb3SP1oBMczydsv6rYUMvPpS6+QT7yQ=="],
 
-    "@profullstack/coinpay-onboard": ["@profullstack/coinpay-onboard@0.5.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.32.2", "zod": "^4.6.7" }, "bin": { "coinpay-onboard": "bin/coinpay-onboard" } }, "sha512-yqSx3pgJLP521Km+XNNn9fyjbbHppgozuGTtzTln9yy+2I0h0bjqXSpsFPwoSgVb5QcyBx+Wzv5170Qb7va1iQ=="],
+    "@profullstack/coinpay-onboard": ["@profullstack/coinpay-onboard@0.5.1", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.32.2", "zod": "^4.6.7" }, "bin": { "coinpay-onboard": "bin/coinpay-onboard" } }, "sha512-vuM/1vYvkXP2E/tBcTBZ8JY4K49qtSPPY1N9XRQvIlcy0Sezr+spOf6vYBkRPhasKcFqda44MRLgxPseG9Kvdg=="],
 
     "@profullstack/footer": ["@profullstack/footer@0.2.6", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-BKwbDszAc7e0mYIBiPjgr/5WS8WyDt8IW718s/zW/8pCWOIB1BGwSNs6fmImRSo5kqIjQKUVbXp22jZQ5GEipA=="],
 
@@ -102,7 +102,7 @@
 
     "@profullstack/webhooks": ["@profullstack/webhooks@0.2.1", "", {}, "sha512-QHeSkpu4O44oJ620qhQqxqFlD3u/OhupmXRnBHw4MGKuDTa0R+Y/727nnF7psSHxxSfnbWfNuVl15z3IXuaZiw=="],
 
-    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.18.1", "", { "dependencies": { "@profullstack/keys": "^0.1.0" } }, "sha512-zc2JGLXMX8eCk7Mp4X91E175enOTNcWPZncKf3LXzoGE+XEhHDJHM1LRZkkY3x2pjLYX3AB11Vx/TP3cobSQ/g=="],
+    "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.18.2", "", { "dependencies": { "@profullstack/keys": "^0.1.0" } }, "sha512-PM0S2ADXPKPvPLLlWVbEqMq+EhKxiNxg1wp0jeGf9S5tz2ZGaNIFqun69cO5lJGZgfh03ST4UkJZGr8CmvCWyg=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
